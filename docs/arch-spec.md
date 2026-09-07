@@ -68,9 +68,15 @@ address, so there is **exactly one path** between any given input-output pair.
 *N=8 example (3 stages), drawn in the standard textbook form (Leighton; Dally & Towles): a
 column of wire positions 0–7 per level, with a straight edge and a crossing edge between every
 partner pair at each level — level k pairs positions differing in bit k, so the crossings get
-coarser (jump by 4) on the left and finer (jump by 1) on the right. There is exactly one path
-between any given input and output — that single-path property is exactly what makes the
-network self-routing, and exactly what makes it internally blocking under arbitrary traffic.*
+coarser (jump by 4) on the left and finer (jump by 1) on the right. The gray lines are the
+network's full switching capability; the four colored lines are 4 of the 8 concrete paths
+available from I7, one per output (straight/cross choice at each of the 3 stages selects the
+destination — e.g. straight-straight-cross lands on O6, not O7). Any single input can reach
+**every** output this way, each via exactly one specific sequence of straight/cross choices —
+that per-destination uniqueness (not an absence of reachability) is what makes the network
+self-routing, and is exactly why it's internally blocking under arbitrary simultaneous traffic:
+two inputs whose unique paths to their destinations need the same wire at the same stage will
+collide, and no third routing choice exists to avoid it.*
 
 - **Path diversity**: none — single unique path per pair, by construction.
 - **Blocking**: general traffic needs either a **Batcher sorting network** in front
