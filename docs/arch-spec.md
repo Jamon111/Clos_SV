@@ -63,44 +63,14 @@ A single N×N array of crosspoints; every input has a direct physical path to ev
 log₂N stages of 2×2 self-routing switch elements. Stage k routes on bit k of the destination
 address, so there is **exactly one path** between any given input-output pair.
 
-```mermaid
-flowchart LR
-  subgraph Stage1["Stage 1 — flip bit 2"]
-    direction TB
-    A0[SE]; A1[SE]; A2[SE]; A3[SE]
-  end
-  subgraph Stage2["Stage 2 — flip bit 1"]
-    direction TB
-    B0[SE]; B1[SE]; B2[SE]; B3[SE]
-  end
-  subgraph Stage3["Stage 3 — flip bit 0"]
-    direction TB
-    C0[SE]; C1[SE]; C2[SE]; C3[SE]
-  end
+![Butterfly network, N=8, 3 stages](diagrams/butterfly.svg)
 
-  I0((I0))-->A0; I4((I4))-->A0
-  I1((I1))-->A1; I5((I5))-->A1
-  I2((I2))-->A2; I6((I6))-->A2
-  I3((I3))-->A3; I7((I7))-->A3
-
-  A0-->B0; A0-->B2
-  A1-->B1; A1-->B3
-  A2-->B0; A2-->B2
-  A3-->B1; A3-->B3
-
-  B0-->C0; B0-->C1
-  B1-->C0; B1-->C1
-  B2-->C2; B2-->C3
-  B3-->C2; B3-->C3
-
-  C0-->O0((O0)); C0-->O1((O1))
-  C1-->O2((O2)); C1-->O3((O3))
-  C2-->O4((O4)); C2-->O5((O5))
-  C3-->O6((O6)); C3-->O7((O7))
-```
-*N=8 example (3 stages). Note e.g. I3 → A3 → B3 → C2 → O5 is the only path between I3 and O5
-— that single-path property is exactly what makes the network self-routing, and exactly what
-makes it internally blocking under arbitrary traffic.*
+*N=8 example (3 stages), drawn in the standard textbook form (Leighton; Dally & Towles): a
+column of wire positions 0–7 per level, with a straight edge and a crossing edge between every
+partner pair at each level — level k pairs positions differing in bit k, so the crossings get
+coarser (jump by 4) on the left and finer (jump by 1) on the right. There is exactly one path
+between any given input and output — that single-path property is exactly what makes the
+network self-routing, and exactly what makes it internally blocking under arbitrary traffic.*
 
 - **Path diversity**: none — single unique path per pair, by construction.
 - **Blocking**: general traffic needs either a **Batcher sorting network** in front
@@ -155,28 +125,11 @@ Valiant load-balancing (disperse to a random midpoint, then route to the true de
 Three stages of smaller crossbar modules: r input modules (n×m), m middle modules (r×r),
 r output modules (m×n).
 
-```mermaid
-flowchart LR
-  subgraph IN["Input modules (n x m)"]
-    IM1[IM1 8x8]; IM2[IM2 8x8]; IM3[IM3 8x8]; IM4[IM4 8x8]
-  end
-  subgraph MID["Middle modules (r x r)"]
-    MM1[MM1 16x16]; MM2[MM2 16x16]; MM3[MM3 16x16]
-  end
-  subgraph OUT["Output modules (m x n)"]
-    OM1[OM1 8x8]; OM2[OM2 8x8]; OM3[OM3 8x8]; OM4[OM4 8x8]
-  end
+![Clos network, 4 input modules, 3 middle modules, 4 output modules](diagrams/clos.svg)
 
-  IM1-->MM1; IM1-->MM2; IM1-->MM3
-  IM2-->MM1; IM2-->MM2; IM2-->MM3
-  IM3-->MM1; IM3-->MM2; IM3-->MM3
-  IM4-->MM1; IM4-->MM2; IM4-->MM3
-
-  MM1-->OM1; MM1-->OM2; MM1-->OM3; MM1-->OM4
-  MM2-->OM1; MM2-->OM2; MM2-->OM3; MM2-->OM4
-  MM3-->OM1; MM3-->OM2; MM3-->OM3; MM3-->OM4
-```
-*Shown with 4 input/output modules and 3 middle modules for legibility (full bipartite
+*Drawn in the classical "bowtie" form (Clos, 1953): input modules on the left, middle modules
+in the center, output modules on the right, full bipartite connectivity between adjacent
+stages. Shown with 4 input/output modules and 3 middle modules for legibility (full bipartite
 connectivity both sides — that bipartite fan-out is the "path diversity" itself). The actual
 N=128 design uses 16 input modules (8×8), 8 middle modules (16×16), 16 output modules (8×8) —
 same pattern, larger.*

@@ -1,0 +1,62 @@
+<svg viewBox="0 0 920 460" xmlns="http://www.w3.org/2000/svg" font-family="Georgia, serif" font-size="13">
+<line x1="190" y1="85.0" x2="395" y2="135.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="85.0" x2="395" y2="260.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="85.0" x2="395" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="185.0" x2="395" y2="135.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="185.0" x2="395" y2="260.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="185.0" x2="395" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="285.0" x2="395" y2="135.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="285.0" x2="395" y2="260.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="285.0" x2="395" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="385.0" x2="395" y2="135.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="385.0" x2="395" y2="260.0" stroke="black" stroke-width="1"/>
+<line x1="190" y1="385.0" x2="395" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="135.0" x2="730" y2="85.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="135.0" x2="730" y2="185.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="135.0" x2="730" y2="285.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="135.0" x2="730" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="260.0" x2="730" y2="85.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="260.0" x2="730" y2="185.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="260.0" x2="730" y2="285.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="260.0" x2="730" y2="385.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="385.0" x2="730" y2="85.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="385.0" x2="730" y2="185.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="385.0" x2="730" y2="285.0" stroke="black" stroke-width="1"/>
+<line x1="525" y1="385.0" x2="730" y2="385.0" stroke="black" stroke-width="1"/>
+<rect x="60" y="60" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="125.0" y="81.0" text-anchor="middle">IM1</text>
+<text x="125.0" y="97.0" text-anchor="middle">8x8</text>
+<rect x="60" y="160" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="125.0" y="181.0" text-anchor="middle">IM2</text>
+<text x="125.0" y="197.0" text-anchor="middle">8x8</text>
+<rect x="60" y="260" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="125.0" y="281.0" text-anchor="middle">IM3</text>
+<text x="125.0" y="297.0" text-anchor="middle">8x8</text>
+<rect x="60" y="360" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="125.0" y="381.0" text-anchor="middle">IM4</text>
+<text x="125.0" y="397.0" text-anchor="middle">8x8</text>
+<rect x="395" y="110" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="460.0" y="131.0" text-anchor="middle">MM1</text>
+<text x="460.0" y="147.0" text-anchor="middle">16x16</text>
+<rect x="395" y="235" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="460.0" y="256.0" text-anchor="middle">MM2</text>
+<text x="460.0" y="272.0" text-anchor="middle">16x16</text>
+<rect x="395" y="360" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="460.0" y="381.0" text-anchor="middle">MM3</text>
+<text x="460.0" y="397.0" text-anchor="middle">16x16</text>
+<rect x="730" y="60" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="795.0" y="81.0" text-anchor="middle">OM1</text>
+<text x="795.0" y="97.0" text-anchor="middle">8x8</text>
+<rect x="730" y="160" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="795.0" y="181.0" text-anchor="middle">OM2</text>
+<text x="795.0" y="197.0" text-anchor="middle">8x8</text>
+<rect x="730" y="260" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="795.0" y="281.0" text-anchor="middle">OM3</text>
+<text x="795.0" y="297.0" text-anchor="middle">8x8</text>
+<rect x="730" y="360" width="130" height="50" fill="white" stroke="black" stroke-width="1.5"/>
+<text x="795.0" y="381.0" text-anchor="middle">OM4</text>
+<text x="795.0" y="397.0" text-anchor="middle">8x8</text>
+<text x="125.0" y="30" text-anchor="middle" font-weight="bold">Input modules (n x m)</text>
+<text x="460.0" y="30" text-anchor="middle" font-weight="bold">Middle modules (r x r)</text>
+<text x="795.0" y="30" text-anchor="middle" font-weight="bold">Output modules (m x n)</text>
+</svg>
