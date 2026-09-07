@@ -1,0 +1,14 @@
+# Simulation artifacts
+*.vcd
+*.fst
+*.out
+sim.out
+*.vpp
+*.vvp
+
+# Verilator output
+obj_dir/
+
+# Editor/OS
+.DS_Store
+*.swp

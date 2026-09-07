@@ -1,0 +1,17 @@
+{
+  "verilog.linting.linter": "verible-verilog-lint",
+  "verilog.linting.veribleVerilogLint.runAtFileLocation": false,
+  "verilog.formatting.systemVerilog.formatter": "verible-verilog-format",
+  "verilog.formatting.veribleVerilogFormatter.path": "verible-verilog-format",
+  "verilog.languageServer.veribleVerilogLs.enabled": true,
+  "verilog.languageServer.veribleVerilogLs.path": "verible-verilog-ls",
+  "files.associations": {
+    "*.sv": "systemverilog",
+    "*.svh": "systemverilog",
+    "*.v": "verilog"
+  },
+  "editor.formatOnSave": true,
+  "[systemverilog]": {
+    "editor.defaultFormatter": "mshr-h.veriloghdl"
+  }
+}
