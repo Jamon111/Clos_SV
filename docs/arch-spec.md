@@ -1,38 +1,48 @@
 # Crossbar Fabric Architecture Spec
 
-Study/reference doc for the arbitrated crossbar project (interview prep, targeting
-AI-networking switch-silicon roles). Covers the candidate interconnection topologies, why
-Clos was selected over the alternatives, how the design scales from 128 ports to thousands of
-ports, and the resulting design parameters for the project.
+Study/reference doc for an arbitrated Ethernet crossbar fabric project (interview prep for
+high-radix switch-silicon roles). Covers the candidate interconnection topologies, evaluates
+each one against the project's actual constraints (size, clock frequency, blocking), documents
+the resulting topology decision, how the design scales to thousands of ports, and the
+resulting design parameters.
 
 Ports are treated as Ethernet PHY/MAC terminations: each ingress MAC receives Ethernet frames,
 segments them into fixed-size cells, and hands them to the fabric; each egress MAC reassembles
 cells back into frames. Any of the N ports can talk to any other — the fabric doesn't know or
-care about frame contents, only cell headers (`{src, dst, seq}`). This framing doesn't change
-the topology/scheduling analysis below, but it's why the diagrams label endpoints as PHYs.
+care about frame contents, only cell headers (`{src, dst, seq}`).
 
 ---
 
-## 1. Problem statement
+## 1. Problem statement and design constraints
 
 Build an input-queued switch fabric that:
 
 1. Avoids head-of-line (HOL) blocking (VOQ).
 2. Schedules input-output matches fairly and starvation-free (iSLIP).
-3. Scales from N=128 ports today to many thousands of Ethernet PHY ports, without paying
-   O(N²) crosspoint cost.
-4. Is parameterizable in port count (N), per-tile crossbar radix (K), and Clos tier count (T)
+3. Is **minimally sized** — fewest crosspoints/switching elements for the guarantee it provides.
+4. Runs the switching decision and datapath transit at a **2 GHz clock** (500 ps cycle budget).
+   This is a real constraint on the *scheduling algorithm's* structure, not just the datapath:
+   an algorithm that needs a global search or a long fixed pipeline before a cell can move is
+   disqualified regardless of how few crosspoints it uses.
+5. Is **minimally blocking, with non-blocking as the ideal** — but not at unbounded cost. The
+   goal is the best point on the size/speed/blocking trade-off, not blocking-probability zero
+   at any price.
+6. Is parameterizable in port count (N), per-tile crossbar radix (K), and Clos tier count (T)
    — so growing the design is a re-parameterization, not a redesign.
-5. Reflects real design trade-offs used in production AI-networking switch ASICs, since
-   that's the target interview domain (high-radix switch silicon for AI data centers).
 
 The topology choice (how ports are physically interconnected) and the scheduling algorithm
-(how contention is resolved each cell time) are separate decisions that interact — this doc
-focuses on the topology choice and how it scales.
+(how contention is resolved each cell time) are separate decisions that interact — a topology
+can be small on paper and still fail constraint 4 if its scheduling algorithm can't run fast
+enough to use it. This doc weighs both together, not topology size in isolation.
 
 ---
 
 ## 2. Candidate topologies
+
+All crosspoint counts below use one consistent unit: a monolithic k×k crossbar module
+contributes k² crosspoints, and a 2×2 switch element (the atomic building block of butterfly,
+Beneš, and Batcher networks) is itself a 2×2 crossbar, so it contributes exactly 4 crosspoints.
+This lets every topology's cost be compared on the same basis.
 
 ### 2.1 Monolithic crossbar
 
@@ -50,18 +60,21 @@ A single N×N array of crosspoints; every input has a direct physical path to ev
 *Shown at N=6 for legibility. Every ● is a dedicated crosspoint. At N=128 this grid is
 128×128 = 16,384 crosspoints.*
 
-- **Path diversity**: N/A — every pair has a dedicated crosspoint.
-- **Blocking**: none internally (any permutation is physically realizable simultaneously).
-- **Cost**: N² crosspoints → **16,384** at N=128.
-- **Scheduling**: exactly the single-stage iSLIP problem — one matching decision per cell time.
-- **Why it doesn't scale**: quadratic crosspoint growth. Going from 128 to 512 ports is a 16x
-  crosspoint increase, not 4x — the textbook reason every high-radix switch ASIC moves to a
-  hierarchical fabric once N gets large.
+- **Blocking**: none internally — trivially, perfectly non-blocking.
+- **Cost**: **16,384 crosspoints** at N=128 — largest of every option considered.
+- **2 GHz fitness**: the datapath (a mux tree) is fast, but the *scheduling* decision is not —
+  a single centralized arbiter must resolve contention across all 128 requesters at every
+  output, with iSLIP needing up to log₂(128)=7 sequential request/grant/accept iterations to
+  converge each cell time. That's a single large, non-parallelizable arbitration domain whose
+  critical path grows with N — the opposite of what a 2 GHz, high-radix design wants.
+- **Why it's disqualified**: fails constraint 3 outright (worst size by a wide margin) and
+  constraint 4 non-trivially (arbitration doesn't parallelize). Kept only as the Milestone 1/2
+  reference design to validate VOQ + iSLIP correctness before adding topology complexity.
 
 ### 2.2 Butterfly / Banyan network
 
 log₂N stages of 2×2 self-routing switch elements. Stage k routes on bit k of the destination
-address, so there is **exactly one path** between any given input-output pair.
+address.
 
 ![Butterfly network, N=8, 3 stages](diagrams/butterfly.svg)
 
@@ -72,24 +85,20 @@ coarser (jump by 4) on the left and finer (jump by 1) on the right. There is exa
 between any given input and output — that single-path property is exactly what makes the
 network self-routing, and exactly what makes it internally blocking under arbitrary traffic.*
 
-- **Path diversity**: none — single unique path per pair, by construction.
+- **Cost**: 7 stages × 64 SEs/stage = 448 SEs × 4 crosspoints/SE = **1,792 crosspoints** —
+  cheapest option considered, by a wide margin.
 - **Blocking**: general traffic needs either a **Batcher sorting network** in front
-  (Batcher-Banyan) or per-stage buffering with backpressure, accepting statistical (not
-  guaranteed) throughput.
-- **Cost**: O(N log N) elements → 7 stages × 64 elements = **448 elements** at N=128
-  (~1,792 crosspoint-equivalents) — far cheaper than a crossbar or Clos network.
-- **Scheduling implication**: the hard problem moves from "matching" to "sorting" or "buffered
-  backpressure across stages" — a different discipline from VOQ + iSLIP-style matching.
+  (§2.5) or per-stage buffering with backpressure, accepting statistical (not guaranteed)
+  throughput.
 - **Where VCs fit in**: virtual channels improve queueing efficiency on the one path that
   exists (less HOL blocking at the flow-control layer, no deadlock) but **do not add path
   diversity**. Two flows forced onto the same physical link by an adversarial permutation still
   contend for that link's bandwidth — VCs let them interleave fairly, they don't create a
   second wire. VCs fix the *average case* on a blocking topology; they don't turn it into a
   non-blocking one.
-- **Real-world use**: common in NoCs/HPC interconnects (flattened butterfly, Dragonfly)
-  precisely because real traffic is rarely adversarial — trading the worst-case guarantee for
-  a cheaper topology plus adaptive routing and generous VCs. Riskier for a general AI-fabric
-  switch where all-reduce/all-to-all traffic can be adversarial by construction.
+- **Why it's disqualified on its own**: fails constraint 5 directly — no non-blocking guarantee,
+  statistical only. Cheapest option is irrelevant if it doesn't meet the blocking requirement;
+  included here because it's the building block both Beneš and Batcher-Banyan are built from.
 
 ### 2.3 Beneš network
 
@@ -108,19 +117,51 @@ flowchart LR
 butterfly real path diversity" — a second physical pass through switching stages, related to
 Valiant load-balancing (disperse to a random midpoint, then route to the true destination).*
 
-- **Path diversity**: yes — genuine, via the second physical pass.
+- **Cost**: 13 stages × 64 SEs/stage = 832 SEs × 4 crosspoints/SE = **3,328 crosspoints** —
+  the **smallest genuinely non-blocking-capable option** of every candidate here, cheaper than
+  either Clos variant.
 - **Blocking**: rearrangeably non-blocking — any permutation *can* be routed without internal
-  contention, but finding the collision-free assignment across the forward/middle/reverse
-  stages is a **global** routing/edge-coloring problem, not a local greedy decision.
-- **Cost**: O(N log N) elements → 13 stages × 64 elements = **832 elements** at N=128 — much
-  cheaper than 3-stage Clos, close to butterfly cost, while still non-blocking.
-- **Why not chosen here**: the non-blocking guarantee requires a global batch computation per
-  permutation rather than a distributed per-cell-time matching decision — a different
-  algorithmic problem from request/grant/accept matching, so it doesn't extend the iSLIP
-  skillset this project demonstrates. Right answer if crosspoint economy dominates; wrong
-  answer if the point is distributed arbitration.
+  contention.
+- **Why it's disqualified despite winning on size**: finding the collision-free assignment
+  across all 13 stages for a given permutation is a **global** routing/edge-coloring problem
+  (e.g. the classical looping algorithm), not a local, per-cell-time-computable decision. There
+  is no known way to compute this in a small, fixed number of cycles using simple parallel
+  logic the way distributed matching can — it fails constraint 4 outright, not on cost grounds.
+  If port assignments changed rarely (circuit switching, where the computation can run once and
+  persist), this would be the strongest candidate on the table. For a fabric re-matching every
+  single cell time, the global computation is the disqualifying factor.
 
-### 2.4 Clos network (selected)
+### 2.4 Batcher-Banyan network
+
+A **Batcher bitonic sorting network** (log₂N·(log₂N+1)/2 stages of compare-exchange elements)
+feeding a banyan network (§2.2). If the N cells presented to the banyan stage are sorted into
+monotonic destination order and represent a conflict-free assignment (at most one cell per
+output — which upstream VOQ + iSLIP already guarantees, since a valid iSLIP match is exactly
+that), the classical Batcher-Banyan theorem guarantees the banyan stage routes all of them
+without internal collision, using a fixed feed-forward pipeline and no runtime search at all.
+This was the basis of several real ATM switch fabrics in the 1980s–90s (e.g. the Bellcore
+Starlite/Sunshine designs).
+
+- **Cost**: Batcher stage — log₂(128)·(log₂(128)+1)/2 = 28 stages × 64 comparators/stage =
+  1,792 comparators × 4 crosspoints/comparator = 7,168 crosspoints. Plus the banyan stage's
+  1,792 crosspoints (§2.2). **Total: 8,960 crosspoints.**
+  This is the correction worth flagging explicitly: Batcher-Banyan has a reputation as the
+  "cheap" non-blocking option because its raw *element* count (1,792 comparators + 448 SEs =
+  2,240) looks small next to Clos's 4,096 *crosspoints* — but comparing raw element counts to
+  crosspoint counts isn't apples-to-apples. Once every element is priced in the same
+  crosspoint-equivalent unit, Batcher-Banyan is actually the **second-largest** non-blocking
+  candidate here, beaten only by the monolithic crossbar.
+- **2 GHz fitness**: no per-slot global computation is needed (a genuine advantage over Beneš)
+  — but the sort network sits directly in the cell's data path with 28 sequential stages before
+  the banyan's 7, for 35 total stages. Even fully pipelined at one stage per cycle, that's 35
+  cycles of fixed latency at 2 GHz (17.5 ns) before a cell exits the fabric, and 35 stages of
+  pipeline registers is a real additional area cost the crosspoint count above doesn't capture.
+- **Why it's disqualified**: loses on size once correctly counted, and its stage count scales
+  as O(log²N) — worse than Clos's tiered O(log N / log K) growth (§5) as port count increases
+  toward "thousands." Doesn't fail constraint 4 the way Beneš does, but doesn't win on
+  constraints 3 or 4 either, so there's no criterion left for it to win on.
+
+### 2.5 Clos network (selected)
 
 Three stages of smaller crossbar modules: r input modules (n×m), m middle modules (r×r),
 r output modules (m×n).
@@ -134,73 +175,80 @@ connectivity both sides — that bipartite fan-out is the "path diversity" itsel
 N=128 design uses 16 input modules (8×8), 8 middle modules (16×16), 16 output modules (8×8) —
 same pattern, larger.*
 
-- **Path diversity**: yes — m independent middle-stage modules, each an alternate path between
-  any given input and output module.
-- **Blocking**: tunable via m.
-  - **Rearrangeably non-blocking**: m ≥ n (existing connections may occasionally need
-    reassignment to admit a new one).
-  - **Strictly non-blocking**: m ≥ 2n − 1 (a new connection never disturbs existing ones —
-    Clos/Slepian-Duguid theorem).
-- **Cost** (128 ports, rearrangeable, n=8, r=16, m=8): 16×(8×8) + 8×(16×16) + 16×(8×8) =
-  **4,096 crosspoints** — ~4x cheaper than monolithic, ~2–9x more than butterfly/Beneš.
-- **Scheduling implication**: path diversity becomes an *extra dimension of the same matching
-  problem* (which middle module to route a cell through), not a different discipline —
-  literally what Concurrent Round-Robin Dispatching (CRRD) and related literature do by
-  extending iSLIP's request/grant/accept with a middle-module "path hunting" round. A naive
-  per-tile iSLIP does **not** automatically work here — an I/O pair can still see internal
-  blocking if the wrong middle module is chosen even with both endpoints idle, which is why
-  CRRD-style extensions exist.
-- **Industry fit**: folded-Clos (leaf-spine) is the dominant real-world topology for
-  hyperscale data-center/AI-cluster scale-out networking, and the standard reason real
-  high-radix switch ASICs avoid monolithic crossbars once N gets large (same O(N²) wall as
-  §2.1).
+- **Cost** (n=8, r=16):
+  - Rearrangeable (m=n=8): 16×(8×8) + 8×(16×16) + 16×(8×8) = **4,096 crosspoints**.
+  - Strict-sense (m=2n−1=15): 16×(8×15) + 15×(16×16) + 16×(15×8) = **7,680 crosspoints**.
+- **Blocking**:
+  - **Rearrangeably non-blocking** (m≥n): any permutation *can* be realized, but a naive
+    per-tile greedy matching can fail to find the assignment even though one exists — this is
+    exactly the gap Concurrent Round-Robin Dispatching (CRRD) and its refinements close,
+    extending iSLIP's request/grant/accept with a middle-module "path hunting" round computed
+    via small, local, parallel round-robin arbiters. In practice this converges to near-100%
+    throughput within a small, fixed number of iterations — well short of a mathematical
+    100%-every-slot guarantee, but strong enough that this is the standard real-world choice
+    for exactly this trade-off.
+  - **Strictly non-blocking** (m≥2n−1): a new connection is always admittable without
+    disturbing existing ones, with no search required — the harder, more expensive guarantee.
+- **2 GHz fitness — the deciding factor.** Unlike the monolithic crossbar's single N-wide
+  arbitration domain, Clos's matching decomposes into many small, parallel, local arbitration
+  problems (radix n=8 or r=16, not N=128): each arbiter's priority-encoder depth is bounded by
+  log₂(16)=4, not log₂(128)=7, and up to 16 or 8 of them run *simultaneously* across tiles.
+  This is the only one of the five candidates whose scheduling decision is both (a) computable
+  in a small, fixed number of cycles and (b) gets *cheaper* per-tile as N grows, rather than
+  more expensive — which is exactly what a 2 GHz, high-radix design needs. Beneš needs a global
+  computation; Batcher-Banyan needs a long fixed pipeline; the monolithic crossbar needs one
+  large non-parallelizable arbiter. Clos is the only structure here where "fast scheduling" and
+  "large N" aren't in tension.
 
 ---
 
 ## 3. Comparison table
 
-| | Monolithic crossbar | Butterfly / Banyan | Beneš | Clos (selected) |
-|---|---|---|---|---|
-| Paths per I/O pair | N/A (dedicated) | 1 | many (global) | many (local, m-wide) |
-| Non-blocking? | Yes, trivially | No (needs sort net or buffering) | Yes, rearrangeable | Yes, tunable (rearrangeable or strict) |
-| Crosspoints @ N=128 | 16,384 | ~448 elements (~1,792 equiv.) | ~832 elements | 4,096 |
-| Scheduling model | Single-stage matching (iSLIP) | Sorting network, or buffered backpressure | Global routing/edge-coloring | Multi-stage matching (iSLIP + middle-module selection, e.g. CRRD) |
-| Fault tolerance | N/A | Single path = single point of failure per pair | Multiple paths, global reroute | Multiple paths, local reroute |
-| Extends this project's iSLIP work? | Trivially (same algorithm, bigger N) | No — different discipline | Partially — different algorithm class | Yes — direct, well-documented extension |
-| Industry association | Rare at high N | NoCs, HPC interconnects (Dragonfly, flattened butterfly) | Telecom cross-connects, theoretical CS | Hyperscale data-center fabrics (near-universal) |
+| | Monolithic | Butterfly | Beneš | Batcher-Banyan | Clos, rearr. | Clos, strict |
+|---|---|---|---|---|---|---|
+| Crosspoints @ N=128 | 16,384 | 1,792 | 3,328 | 8,960 | 4,096 | 7,680 |
+| Non-blocking? | Yes, trivially | No (statistical only) | Yes, rearrangeable | Yes, if input is conflict-free | Yes, near-100% via CRRD | Yes, always |
+| Scheduling per cell time | 1 large centralized arbiter (O(N) radix) | Local, but no guarantee | **Global** edge-coloring (not real-time) | None (fixed pipeline) — but 35-stage latency | Small local arbiters, parallel (O(n) or O(r) radix) | Small local arbiters, parallel |
+| 2 GHz real-time schedulable? | Marginal — one big arbiter | Yes, but no guarantee | **No** | Yes, at the cost of pipeline depth | **Yes** | Yes |
+| Scales to thousands of ports (§5) | No (O(N²)) | Yes | Yes | Worse — O(log²N) stages | Yes — tiered, O(log N / log K) | Yes — tiered |
+| Meets all 3 constraints (size, 2 GHz, blocking)? | No — fails size, marginal on speed | No — fails blocking | No — fails speed | No — loses on size once correctly counted | **Yes** | Yes, at ~1.9x the crosspoint cost |
 
 ---
 
-## 4. Decision: Clos
+## 4. Decision: Clos, rearrangeable (m=n)
 
-Selected for three reasons, in priority order:
+Every candidate above was disqualified by a specific, stated constraint, not by preference:
 
-1. **Algorithmic continuity.** The project's point is to demonstrate VOQ + iSLIP arbitration
-   depth. Clos's scheduling problem (select a middle module, then match within it) is a
-   direct, literature-backed extension of the same request/grant/accept structure (CRRD).
-   Butterfly and Beneš both replace matching with a different discipline (sorting/buffering,
-   or global routing) that doesn't build on the same skill.
-2. **Industry relevance to the target interview.** Eridu's own public language for their
-   scale-out design ("single-hop network" up to 5,120 GPUs, "two-tier network" beyond
-   1M compute engines) is textbook folded-Clos vocabulary, and the O(N²) crosspoint-scaling
-   challenge they describe publicly is precisely the problem Clos decomposition solves. Their
-   internal chip microarchitecture is undisclosed — this is an informed inference, not a
-   confirmed fact — but Clos is the industry-standard answer at both the layer their marketing
-   describes and the layer their technical challenge implies.
-3. **Tunable non-blocking guarantee.** Clos lets the cost/guarantee trade-off be an explicit,
-   nameable parameter (m relative to n) rather than an implicit property of buffer depth and
-   traffic assumptions — easier to defend under questioning than a statistical argument about
-   VC-buffered butterfly throughput.
+- **Monolithic crossbar** — fails constraint 3 (worst size, 16,384 crosspoints) and is marginal
+  on constraint 4 (one large, non-parallelizable arbitration domain).
+- **Plain butterfly** — fails constraint 5 outright (no non-blocking guarantee, statistical
+  only); virtual channels improve the average case but don't add path diversity.
+- **Beneš network** — wins on size (3,328 crosspoints, smallest non-blocking-capable option)
+  but fails constraint 4: its non-blocking guarantee requires a global routing/edge-coloring
+  computation per permutation, which has no known small-fixed-cycle-count implementation. Right
+  answer for circuit switching (where the computation can run once and persist); wrong answer
+  for a fabric re-matching every cell time.
+- **Batcher-Banyan** — doesn't fail any single constraint outright, but wins on none of them
+  either once crosspoints are counted consistently (8,960 — second-largest option, worse than
+  strict-sense Clos) and its 35-stage fixed pipeline is a real latency and register cost.
 
-**Explicitly not chosen:**
-- *Monolithic crossbar* — kept as Milestone 1/2 reference design to validate correctness
-  before adding topology complexity, but not the final target due to O(N²) cost.
-- *Butterfly + VCs* — cheaper, but solves a different (weaker, statistical) problem. VCs
-  improve queueing efficiency on a fixed path; they don't add path diversity. Reasonable
-  under a known-benign traffic model; riskier for general AI-fabric traffic.
-- *Beneš* — better crosspoint economy than Clos with an equivalent non-blocking guarantee, but
-  its global routing/edge-coloring requirement doesn't extend the per-cell greedy matching
-  skillset this project is built around.
+**Clos with rearrangeable non-blocking (m=n=8) is the only candidate that is simultaneously**
+**small (4,096 crosspoints — 4x cheaper than monolithic, and cheaper than every genuinely**
+**non-blocking-capable alternative except Beneš), 2 GHz-schedulable (matching decomposes into**
+**small, parallel, local arbitration — the only structure here where speed doesn't get worse**
+**as N grows), and non-blocking in the practical, strong sense that CRRD-style scheduling**
+**achieves in real hardware.** It is not the smallest option (Beneš is smaller) and it is not
+the strongest non-blocking guarantee (strict-sense Clos and the monolithic crossbar are
+stronger) — it is the best point on all three axes simultaneously, which is what the project
+constraints actually asked for.
+
+**Strict-sense Clos (m=2n−1=15, 7,680 crosspoints) is the documented escalation path** if a
+hard, always-non-blocking guarantee is later required regardless of cost — it keeps the same
+2 GHz-friendly distributed scheduling structure, just with enough middle-module slack that no
+search or CRRD-style iteration is needed to find a valid assignment. Multi-stage Clos +
+distributed iSLIP-family scheduling (CRRD and its refinements) is also the dominant answer
+across real high-radix Ethernet switch ASICs for exactly this three-way trade-off — not a
+company-specific choice, a well-established one.
 
 ---
 
@@ -212,12 +260,12 @@ A 3-stage Clos is limited by the radix it can build its *middle*-stage modules a
 edge-module size small and let N grow, the middle-stage radix r = N/n grows right along with
 it — and once r exceeds the largest crossbar you can actually build as one tile (call that
 ceiling **K**, set by area/pinout/wiring and, concretely for this project, by how many
-iSLIP iterations you can fit in a cell time at your target clock), the middle stage itself
-becomes infeasible as a monolithic crossbar. The fix is the same trick recursively applied:
-decompose the middle stage into its own 3-stage Clos, turning a 3-stage network into a
-**5-stage** one. This is exactly how real data-center fabrics scale — a 2-tier leaf-spine
-network *is* the folded view of a 3-stage Clos; a 3-tier leaf-spine-superspine network *is*
-the folded view of a 5-stage Clos.
+iSLIP/CRRD iterations you can fit in a cell time at 2 GHz), the middle stage itself becomes
+infeasible as a monolithic crossbar. The fix is the same trick recursively applied: decompose
+the middle stage into its own 3-stage Clos, turning a 3-stage network into a **5-stage** one.
+This is exactly how real data-center fabrics scale — a 2-tier leaf-spine network *is* the
+folded view of a 3-stage Clos; a 3-tier leaf-spine-superspine network *is* the folded view of a
+5-stage Clos.
 
 ```mermaid
 flowchart TB
@@ -233,7 +281,7 @@ flowchart TB
   S2---L1; S2---L2; S2---L3; S2---L4
   L1---H1; L2---H2; L3---H3; L4---H4
 ```
-*2-tier / folded 3-stage Clos — this is your current N=128-radix design, scaled out across
+*2-tier / folded 3-stage Clos — this is the current N=128-radix design, scaled out across
 multiple switch tiles instead of built as one.*
 
 ```mermaid
@@ -281,27 +329,24 @@ non-terminal tier), maximum supportable ports:
 | 3 (leaf-spine-superspine) | 5-stage | 65,536 | 524,288 |
 | 4 | 7-stage | 2,097,152 | 33,554,432 |
 
-Using **K=128** — your own project's tile radix, empirically the thing Milestone 2 is
-supposed to characterize (max feasible N before iSLIP's log₂N-iteration timing budget breaks
-down at your target clock) — a plain **3-stage Clos already reaches 8,192 ports** without
-adding a tier. "Many thousands" of ports (low thousands up to ~8K) is covered by the existing
-design. Only past ~8K ports would a third tier (5-stage Clos, decomposing the former 128×128
-middle-stage crossbars into their own sub-Clos networks) become necessary.
+Using **K=128** — this project's tile radix, empirically the thing Milestone 2 is supposed to
+characterize (max feasible N before iSLIP's log₂N-iteration timing budget breaks down at
+2 GHz) — a plain **3-stage Clos already reaches 8,192 ports** without adding a tier. "Many
+thousands" of ports (low thousands up to ~8K) is covered by the existing design. Only past ~8K
+ports would a third tier (5-stage Clos, decomposing the former 128×128 middle-stage crossbars
+into their own sub-Clos networks) become necessary.
 
-This is also the direct mechanism behind Eridu's own value proposition: doubling native
-per-chip radix K roughly *quadruples* the reach of a given tier count (N_max ∝ K^h), which is
-exactly why "one high-radix switch replaces up to 30 lower-radix switches, flatter network,
-lower latency" is a meaningful claim rather than marketing — bigger K pushes the point where
-you need another tier (another hop, more latency, deeper nested scheduling) further out. It
-also maps directly onto their own public distinction between a "single-hop network" (their max
-native reach at one tier) and a "two-tier network" for anything beyond that.
+This is also the general mechanism behind why real switch vendors treat per-chip radix as a
+headline metric: doubling native per-tile radix K roughly *quadruples* the reach of a given
+tier count (N_max ∝ K^h), which directly reduces hop count (latency, jitter) for a fixed
+cluster size. It's also why Batcher-Banyan (§2.4) scales worse here — its stage count grows as
+O(log²N) directly, with no equivalent "increase K, keep tiers low" knob the way tiered Clos has.
 
 **Cost of adding a tier**, to be explicit about the trade-off: each additional tier adds a hop
-(more latency, more jitter — the exact thing Eridu's flatter-network pitch is optimizing
-against) and requires a deeper nested scheduling extension (a 5-stage Clos needs CRRD-style
-matching with *two* levels of "which module" selection, not one). Tiers should be added only
-when the N_max formula says the current tier count can't reach the target port count — not
-preemptively.
+(more latency, more jitter) and requires a deeper nested scheduling extension (a 5-stage Clos
+needs CRRD-style matching with *two* levels of "which module" selection, not one). Tiers should
+be added only when the N_max formula says the current tier count can't reach the target port
+count — not preemptively.
 
 ---
 
@@ -309,17 +354,18 @@ preemptively.
 
 - **N** — total port count (Ethernet PHYs), the top-level parameter.
 - **K** — max feasible single-tile crossbar radix, determined empirically in Milestone 2
-  (bounded by iSLIP's log₂(tile-N)-iteration timing budget at target clock).
+  (bounded by iSLIP/CRRD's iteration timing budget at 2 GHz).
 - **T** — Clos tier count, chosen from the N_max = 2×(K/2)^T formula in §5 for the target N.
 - Cell size: fixed, e.g. 64B (TBD — decide alongside VOQ depth sizing).
 - Milestone 1: 8×8 monolithic crossbar, VOQ + iSLIP, reference/golden-model validated.
 - Milestone 2: scale reference design to N=128 monolithic; characterize O(N) arbiter cost,
-  iterations-vs-throughput curve, and the practical K ceiling for a single tile.
-- Milestone 3: 3-stage Clos at N=128 (T=2 tiers, n=8, r=16, m=8 → 4,096 crosspoints),
-  CRRD-style scheduling extension of the Milestone 1/2 `rr_pointer` primitive.
-- Stretch: generalize the Milestone 3 Clos generator to be recursive in T (parameterized
-  tier count), so scaling from 128 to thousands of ports is "increase T per the §5 formula"
-  rather than a redesign.
+  iterations-vs-throughput curve, and the practical K ceiling for a single tile at 2 GHz.
+- Milestone 3: 3-stage Clos at N=128 (T=2 tiers, n=8, r=16, m=8 → 4,096 crosspoints,
+  rearrangeable), CRRD-style scheduling extension of the Milestone 1/2 `rr_pointer` primitive.
+- Stretch: generalize the Milestone 3 Clos generator to be recursive in T (parameterized tier
+  count) and to support switching m from 8 to 15 (rearrangeable → strict-sense) as a build-time
+  parameter, so scaling from 128 to thousands of ports or upgrading the blocking guarantee is a
+  re-parameterization rather than a redesign.
 
 ---
 
@@ -331,16 +377,21 @@ preemptively.
       why pointers only update on a successful match.
 - [ ] iSLIP performance: ~63% single-iteration asymptotic throughput under uniform traffic;
       O(log N) iterations needed to converge toward a maximal (not maximum) matching.
+- [ ] Why crosspoint counts across topologies must be normalized to the same unit (a 2×2 switch
+      element is a 4-crosspoint crossbar) before comparing them — the naive "count the boxes"
+      comparison makes Batcher-Banyan look cheap when it's actually one of the more expensive
+      non-blocking-capable options here.
 - [ ] Clos non-blocking conditions: rearrangeable (m≥n) vs strict-sense (m≥2n−1), and the
-      operational difference (occasional path reassignment vs never).
+      operational cost difference (~1.9x crosspoints for the harder guarantee).
 - [ ] Why a naive per-tile iSLIP doesn't just work on a multi-stage Clos, and what CRRD adds.
-- [ ] Butterfly/Banyan blocking behavior and why VCs don't fix it (flow-control fix vs
-      topological fix — different problems).
-- [ ] Beneš as the "give a butterfly real path diversity" structure, and why its global
-      routing requirement makes it a worse fit here than Clos despite better crosspoint cost.
-- [ ] Crosspoint-count math for all four topologies at N=128 (table in §3).
-- [ ] N_max = 2×(K/2)^h formula for h-tier Clos/fat-tree networks, and being able to derive
-      it live (each non-terminal tier splits radix K half up / half down).
-- [ ] Connection to Eridu's own public framing: O(N²) crossbar scaling wall at high radix,
-      "single-hop"/"two-tier" scale-out language as folded-Clos terminology, and why bigger
-      native chip radix (K) directly reduces required tiers for a given port count.
+- [ ] Why Beneš — smaller than Clos — is disqualified by a real-time scheduling constraint, not
+      a cost one: its non-blocking guarantee needs a global edge-coloring computation with no
+      known small-fixed-cycle-count implementation.
+- [ ] Why Batcher-Banyan's 35-stage fixed pipeline is a real latency/register cost even though
+      it needs no per-slot search, and why its O(log²N) stage growth scales worse than tiered
+      Clos as port count grows.
+- [ ] Why Clos's decomposition into small, parallel, local arbiters is specifically what makes
+      it 2 GHz-schedulable at high radix, where a monolithic crossbar's single large arbiter is
+      not — this is the deciding argument, not crosspoint count alone.
+- [ ] N_max = 2×(K/2)^h formula for h-tier Clos/fat-tree networks, and being able to derive it
+      live (each non-terminal tier splits radix K half up / half down).
