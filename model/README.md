@@ -51,13 +51,37 @@ python3 sim.py --n-ports 128 --load 0.9 --pattern hotspot --hotspot-frac 0.7 \
     --length-dist bimodal --cell-size 64 --iterations 3 --slots 20000 --seed 1
 ```
 
-Traffic patterns: `uniform`, `hotspot` (`--hotspot-ports`, `--hotspot-frac`), `permutation`
-(fixed conflict-free destination per input, a useful easy-case baseline), `bursty` (on/off
-Markov-modulated arrivals, `--bursty-mean-on/off`).
+### CLI argument reference
 
-Length distributions: `fixed`, `uniform` (`--length-uniform-range`), `bimodal`
-(`--length-bimodal small large P(small)` — the default, modeling a mouse/elephant mix), or
-`exponential` (`--length-exponential-mean`).
+| Argument | Type / units | Default | Meaning |
+|---|---|---|---|
+| `--n-ports` | int | 128 | Port count N (both ingress and egress). |
+| `--load` | float, **fraction of cell-slot capacity** | 0.8 | Offered load per input, 0–1. **Not** a packet-arrival probability — see "Why `load` isn't packet-arrival probability" below. 1.0 = one cell's worth of work every slot (saturation). |
+| `--iterations` | int | 3 | iSLIP request/grant/accept iterations per slot. |
+| `--slots` | int | 20000 | Simulation duration, in cell-times. |
+| `--seed` | int | 0 | RNG seed — same seed reproduces the exact same run. |
+| `--pattern` | `uniform` \| `hotspot` \| `permutation` \| `bursty` | `uniform` | Destination-selection pattern. `permutation` = fixed conflict-free destination per input (easy-case baseline). `bursty` = on/off Markov-modulated arrivals layered on top of uniform destination choice. |
+| `--hotspot-ports` | int, space-separated list | `[0]` | Which port(s) are the hotspot, when `--pattern hotspot`. |
+| `--hotspot-frac` | float, 0–1 | 0.7 | Fraction of *non-hotspot-branch* traffic steered to `--hotspot-ports`; note the remaining `(1-frac)` traffic is still uniform over *all* ports, hotspot ports included — see `traffic.py`'s `_choose_destination`. |
+| `--bursty-mean-on` / `--bursty-mean-off` | float, slots | 10.0 / 10.0 | Mean duration of each on/off period for `--pattern bursty` (exponentially distributed). |
+| `--length-dist` | `fixed` \| `uniform` \| `bimodal` \| `exponential` | `bimodal` | Packet-length distribution, in **bytes**. |
+| `--length-fixed-bytes` | int, bytes | 64 | Packet size for `--length-dist fixed`. |
+| `--length-uniform-range` | int int, bytes | `64 1518` | `lo hi` for `--length-dist uniform`. |
+| `--length-bimodal` | float float float | `64 1518 0.6` | `small_bytes large_bytes P(small)` for `--length-dist bimodal` — models a mouse/elephant traffic mix. |
+| `--length-exponential-mean` | int, bytes | 512 | Mean for `--length-dist exponential`. |
+| `--cell-size` | int, **bytes** | 64 | Segmentation granularity: `n_cells_per_packet = ceil(packet_bytes / cell_size)`. **This is bytes, not words** — for "one word per cell" use `--cell-size 4` (32-bit) or `--cell-size 8` (64-bit), not `--cell-size 1` (1 byte — an extreme sub-word value; see the worked example below on why that produces huge latencies unrelated to the switch topology). |
+| `--json` | flag | off | Print machine-readable JSON instead of the text/ASCII report. |
+| `--no-theoretical` | flag | off | Skip the `theoretical.py` best-case Monte Carlo pass (it's a separate, additional computation). |
+| `--no-histogram` | flag | off | Skip the latency histograms. |
+| `--progress-interval` | int, slots | auto (~10 updates for 2000+ slot runs) | Print progress to stderr every N slots; `0` disables. |
+
+**Worked example of the `--cell-size` units trap**: `--cell-size 1` with the default bimodal
+length distribution turns a 1518-byte "large" packet into a **1518-cell burst** (vs. 24 cells
+at a realistic `--cell-size 64`). Since a VOQ is strict FIFO, a cell near the end of that burst
+cannot be delivered until ~1500 earlier cells from the *same packet* drain first — a huge
+latency number that reflects a mis-set parameter, not the switch fabric being slow (this model
+doesn't simulate Clos's physical hop latency at all yet — Milestone 3 territory; everything
+measured here is queueing delay in a single-stage VOQ+iSLIP scheduler).
 
 All randomness is seeded (`--seed`) for reproducibility — same seed, same result, which matters
 once this is used as a regression baseline against RTL simulation.
