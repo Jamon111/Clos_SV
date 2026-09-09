@@ -51,6 +51,16 @@ the open-source EDA toolchain to check whether the design hits timing.
 - **No company-specific references in `docs/arch-spec.md`.** The repo is intended to be
   publicly viewable — the technical reasoning stands on its own without attributing it to any
   specific company's undisclosed microarchitecture.
+- **CIOQ with speedup S=2 (Milestone 3+), not a smarter scheduler, closes iSLIP's efficiency
+  gap.** Full max-weight matching (the actual optimum) is O(N³) and irrelevant for 2 GHz
+  hardware — ruled out as an RTL candidate, kept only as a hypothetical Python-only ceiling
+  (never built). Measured on the model: speedup can't raise `aggregate_throughput` (flat across
+  S — the ceiling is set by offered rate vs. the external line's 1-cell/slot cap), but
+  `conditional_throughput_mean` converges 0.7427 → 1.0 as S goes 1.0 → 4.0. Real cost: at 448G
+  line rate and 2 GHz, cell-time budget is only ~2.3 cycles at 64B cells — the arbiter must be
+  pipelined (issue-rate, not decision latency, is the constraint), and cell size/speedup are
+  jointly constrained by this, not decided from HOL-fairness alone. Full reasoning and the
+  measured table: `docs/arch-spec.md` §7.
 
 ## Status / where we left off
 
@@ -65,6 +75,9 @@ the open-source EDA toolchain to check whether the design hits timing.
   structured under `histograms` in `--json`) and progress logging to stderr for long runs
   (default-on above 2000 slots, `--progress-interval 0` disables). The model is genuinely slow
   in pure Python at N=128 (~565 slots/s) -- keep that in mind before running large sweeps.
+- The model now supports `--speedup` (CIOQ, see the key decision above) — verified S=1.0
+  reproduces prior behavior bit-for-bit. Each unit of speedup roughly multiplies per-slot
+  runtime, so large sweeps at high S are slow; use `--progress-interval` for visibility.
 - **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started.** Next concrete action: implement
   `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
   `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6. When writing the RTL flit
