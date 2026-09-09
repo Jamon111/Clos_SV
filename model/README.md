@@ -14,6 +14,13 @@ represented. A cell is metadata only (`src, dst, packet_id, seq, is_last, gen_ti
 model's job is throughput/latency/fairness, which that's sufficient for. Bit-accurate datapath
 timing belongs in the RTL testbench, which is the thing this model is compared against.
 
+**`gen_time` is model-only and must not be mirrored in the RTL flit format.** It exists purely
+for latency measurement convenience in this non-synthesizable model. Embedding a timestamp in
+the actual hardware cell/flit would waste real silicon bits for no functional purpose — in the
+RTL, latency should be measured by the testbench externally, keyed off a sequence/tag field
+that genuinely is part of the flit (e.g. an equivalent of `packet_id`/`seq`), not by carrying
+absolute time through the datapath.
+
 ## Files
 
 - `cell.py` — the `Cell` metadata record.
