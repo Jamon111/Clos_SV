@@ -55,6 +55,13 @@ the open-source EDA toolchain to check whether the design hits timing.
 ## Status / where we left off
 
 - Toolchain, docs, and the Python model are done (see `README.md`'s roadmap checklist).
+- The Python model now has debug/validation instrumentation
+  (`conservation_check`, `bottleneck_throughput`, `conditional_throughput_mean`, and an
+  independent theoretical best-case bound in `model/theoretical.py`) — added after a real
+  question about a hotspot run's low aggregate throughput turned out to be the theoretically
+  correct answer, not a bug. Read `model/README.md`'s "Reading the output" section before
+  interpreting any future run's numbers, especially under non-uniform traffic patterns.
 - **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started.** Next concrete action: implement
   `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
-  `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6.
+  `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6. When writing the RTL flit
+  format, do not include a timestamp field (see the `gen_time` decision above).
