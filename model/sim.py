@@ -12,6 +12,7 @@ import argparse
 import json
 
 from fabric import SwitchSim
+from theoretical import best_case_throughput
 from traffic import TrafficConfig
 
 
@@ -38,6 +39,8 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--cell-size", type=int, default=64, help="cell size in bytes")
     p.add_argument("--json", action="store_true", help="print summary as JSON")
+    p.add_argument("--no-theoretical", action="store_true",
+                    help="skip the theoretical best-case bound (it's a separate Monte Carlo pass)")
     return p.parse_args()
 
 
@@ -64,12 +67,21 @@ def main() -> None:
     sim = SwitchSim(cfg, iterations=args.iterations, seed=args.seed)
     summary = sim.run(args.slots)
 
+    theoretical = None if args.no_theoretical else best_case_throughput(cfg)
+
     if args.json:
-        print(json.dumps(summary, indent=2))
-    else:
-        width = max(len(k) for k in summary)
-        for k, v in summary.items():
+        print(json.dumps({"actual": summary, "theoretical_best_case": theoretical}, indent=2))
+        return
+
+    width = max(len(k) for k in summary)
+    if theoretical:
+        print("=== theoretical best-case (offered traffic alone, no simulation) ===")
+        for k, v in theoretical.items():
             print(f"{k:<{width}} : {v}")
+        print()
+    print("=== simulated actual (VOQ + iSLIP) ===")
+    for k, v in summary.items():
+        print(f"{k:<{width}} : {v}")
 
 
 if __name__ == "__main__":

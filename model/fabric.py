@@ -61,6 +61,7 @@ class SwitchSim:
         requests = [
             {dst for dst in range(self.n) if self.voq[src][dst]} for src in range(self.n)
         ]
+        active_dsts = {dst for reqs in requests for dst in reqs}
 
         # 3) Run iSLIP matching for this slot.
         matches = self.arbiter.match(requests)
@@ -71,6 +72,8 @@ class SwitchSim:
             cell = q.popleft()
             self.metrics.record_delivery(cell, now)
             self.voq_oldest_gen_time[src][dst] = q[0].gen_time if q else None
+
+        self.metrics.record_dest_activity(active_dsts, {dst for _, dst in matches})
 
         # 5) Track VOQ ages (starvation bound) before advancing time.
         ages = {}
@@ -84,7 +87,12 @@ class SwitchSim:
         self.metrics.tick()
         self.now += 1
 
+    def cells_queued(self) -> int:
+        """Cells still sitting in VOQs, not delivered -- backlog, not drops
+        (VOQs here are unbounded; there is no drop path in this model)."""
+        return sum(len(self.voq[src][dst]) for src in range(self.n) for dst in range(self.n))
+
     def run(self, n_slots: int) -> dict:
         for _ in range(n_slots):
             self.step()
-        return self.metrics.summary()
+        return self.metrics.summary(cells_queued_at_end=self.cells_queued())
