@@ -41,7 +41,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--json", action="store_true", help="print summary as JSON")
     p.add_argument("--no-theoretical", action="store_true",
                     help="skip the theoretical best-case bound (it's a separate Monte Carlo pass)")
+    p.add_argument("--no-histogram", action="store_true", help="skip latency histograms")
+    p.add_argument("--progress-interval", type=int, default=None,
+                    help="print progress every N slots to stderr (default: auto, ~10 updates "
+                         "for runs of 2000+ slots; pass 0 to disable)")
     return p.parse_args()
+
+
+def print_ascii_histogram(title: str, hist: list[tuple[str, int]], bar_width: int = 40) -> None:
+    print(f"--- {title} ---")
+    if not hist:
+        print("(no data)")
+        return
+    max_count = max(c for _, c in hist)
+    label_width = max(len(label) for label, _ in hist)
+    for label, count in hist:
+        bar_len = round(bar_width * count / max_count) if max_count else 0
+        print(f"{label:>{label_width}} slots | {'#' * bar_len:<{bar_width}} {count}")
 
 
 def main() -> None:
@@ -64,13 +80,22 @@ def main() -> None:
         seed=args.seed,
     )
 
+    if args.progress_interval is not None:
+        progress_interval = args.progress_interval
+    else:
+        progress_interval = max(1, args.slots // 10) if args.slots >= 2000 else 0
+
     sim = SwitchSim(cfg, iterations=args.iterations, seed=args.seed)
-    summary = sim.run(args.slots)
+    summary = sim.run(args.slots, progress_interval=progress_interval)
+    histograms = None if args.no_histogram else sim.metrics.latency_histograms()
 
     theoretical = None if args.no_theoretical else best_case_throughput(cfg)
 
     if args.json:
-        print(json.dumps({"actual": summary, "theoretical_best_case": theoretical}, indent=2))
+        print(json.dumps(
+            {"actual": summary, "theoretical_best_case": theoretical, "histograms": histograms},
+            indent=2,
+        ))
         return
 
     width = max(len(k) for k in summary)
@@ -82,6 +107,12 @@ def main() -> None:
     print("=== simulated actual (VOQ + iSLIP) ===")
     for k, v in summary.items():
         print(f"{k:<{width}} : {v}")
+
+    if histograms:
+        print()
+        print_ascii_histogram("cell latency histogram (slots)", histograms["cell_latency_histogram"])
+        print()
+        print_ascii_histogram("packet latency histogram (slots)", histograms["packet_latency_histogram"])
 
 
 if __name__ == "__main__":

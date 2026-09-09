@@ -16,7 +16,29 @@ actually had a backlogged request -- "throughput while packets are running").
 from __future__ import annotations
 
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
+
+
+def log2_histogram(data: list[int]) -> list[tuple[str, int]]:
+    """Log2-bucketed histogram: exact 0 gets its own bucket, then [1,2),
+    [2,4), [4,8), ... Chosen over fixed-width linear buckets because latency
+    distributions here are routinely heavy-tailed (e.g. a hotspot run with
+    mean ~295 and p99 ~12,600) -- a linear histogram would dump almost
+    everything into the first bucket and say nothing useful about the tail.
+    """
+    if not data:
+        return []
+    counts: Counter[int] = Counter()
+    for v in data:
+        counts[0 if v <= 0 else v.bit_length()] += 1
+
+    def label(bucket: int) -> str:
+        if bucket == 0:
+            return "0"
+        lo, hi = 1 << (bucket - 1), (1 << bucket) - 1
+        return f"{lo}" if lo == hi else f"{lo}-{hi}"
+
+    return [(label(b), counts[b]) for b in sorted(counts)]
 
 
 class Metrics:
@@ -122,6 +144,15 @@ class Metrics:
         sum_x = sum(values)
         sum_x2 = sum(v * v for v in values)
         return (sum_x ** 2) / (n * sum_x2) if sum_x2 else 1.0
+
+    def latency_histograms(self) -> dict:
+        """Kept separate from summary() since these are lists of (bucket,
+        count) pairs, not scalars -- summary()'s flat key:value printing
+        doesn't suit them. See sim.py for ASCII rendering."""
+        return {
+            "cell_latency_histogram": log2_histogram(self.cell_latencies),
+            "packet_latency_histogram": log2_histogram(self.packet_latencies),
+        }
 
     def summary(self, cells_queued_at_end: int | None = None) -> dict:
         def pct(data, p):

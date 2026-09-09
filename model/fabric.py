@@ -4,6 +4,8 @@ metrics together. One call to step() = one cell-time slot."""
 from __future__ import annotations
 
 import random
+import sys
+import time
 from collections import deque
 
 from arbiter import ISlipArbiter
@@ -92,7 +94,23 @@ class SwitchSim:
         (VOQs here are unbounded; there is no drop path in this model)."""
         return sum(len(self.voq[src][dst]) for src in range(self.n) for dst in range(self.n))
 
-    def run(self, n_slots: int) -> dict:
-        for _ in range(n_slots):
+    def run(self, n_slots: int, progress_interval: int = 0, progress_stream=None) -> dict:
+        """progress_interval=0 disables progress messages. Always written to
+        `progress_stream` (default stderr), so `--json` on stdout stays
+        parseable even with progress enabled."""
+        stream = progress_stream if progress_stream is not None else sys.stderr
+        start = time.monotonic()
+
+        for i in range(n_slots):
             self.step()
+            if progress_interval and (i + 1) % progress_interval == 0:
+                elapsed = time.monotonic() - start
+                rate = (i + 1) / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[progress] slot {i + 1}/{n_slots} ({100 * (i + 1) / n_slots:.0f}%) "
+                    f"delivered={self.metrics.cells_delivered} queued={self.cells_queued()} "
+                    f"elapsed={elapsed:.1f}s ({rate:.0f} slots/s)",
+                    file=stream,
+                )
+
         return self.metrics.summary(cells_queued_at_end=self.cells_queued())

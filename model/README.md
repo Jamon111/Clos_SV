@@ -62,6 +62,20 @@ Length distributions: `fixed`, `uniform` (`--length-uniform-range`), `bimodal`
 All randomness is seeded (`--seed`) for reproducibility — same seed, same result, which matters
 once this is used as a regression baseline against RTL simulation.
 
+**Progress**: printed to stderr (so `--json` on stdout stays parseable) every ~10% of the run
+for anything 2000+ slots, since a large `--n-ports` run is genuinely slow in pure Python (the
+N=128 hotspot example above takes ~35s at ~565 slots/s). Override with `--progress-interval N`,
+or `--progress-interval 0` to disable.
+
+**Latency histograms**: printed by default (ASCII bar chart in text mode, bucket/count pairs
+under `histograms` in `--json` mode), log2-bucketed rather than linear-width — latency
+distributions here are routinely heavy-tailed, and a linear histogram would dump nearly
+everything into the first bucket. Skip with `--no-histogram`. Worth watching for: a
+non-unimodal shape (e.g. a small secondary cluster of cells at 1000x the main cluster's
+latency) usually means a distinct subpopulation is being treated very differently by the
+scheduler -- e.g. cells stuck behind a saturated hotspot versus cells on an otherwise-idle
+path -- which the mean/p99 numbers alone can hide.
+
 ## Reading the output: which throughput number means what
 
 `aggregate_throughput` (cells delivered / (slots × N)) is low under a concentrated pattern like
