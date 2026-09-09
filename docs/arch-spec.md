@@ -356,12 +356,18 @@ count — not preemptively.
 - **K** — max feasible single-tile crossbar radix, determined empirically in Milestone 2
   (bounded by iSLIP/CRRD's iteration timing budget at 2 GHz).
 - **T** — Clos tier count, chosen from the N_max = 2×(K/2)^T formula in §5 for the target N.
-- Cell size: fixed, e.g. 64B (TBD — decide alongside VOQ depth sizing).
+- **S** — CIOQ internal fabric speedup over external line rate (§7), target 2.0. Jointly
+  constrained with cell size via the 448G/2 GHz cycle-budget math in §7, not decided from the
+  HOL-fairness cell-size argument (§2.2) alone.
+- Cell size: fixed, e.g. 64B (TBD — decide alongside VOQ depth sizing and jointly with S, §7).
 - Milestone 1: 8×8 monolithic crossbar, VOQ + iSLIP, reference/golden-model validated.
 - Milestone 2: scale reference design to N=128 monolithic; characterize O(N) arbiter cost,
   iterations-vs-throughput curve, and the practical K ceiling for a single tile at 2 GHz.
 - Milestone 3: 3-stage Clos at N=128 (T=2 tiers, n=8, r=16, m=8 → 4,096 crosspoints,
   rearrangeable), CRRD-style scheduling extension of the Milestone 1/2 `rr_pointer` primitive.
+- Milestone 3+: CIOQ with speedup S=2 (§7) — an efficiency refinement on top of an already-
+  correct design, not a Milestone 1 prerequisite. Validate the cell-size/speedup cycle-budget
+  math against real synthesis and STA once RTL exists (OpenSTA/ASAP7 toolchain, project README).
 - Stretch: generalize the Milestone 3 Clos generator to be recursive in T (parameterized tier
   count) and to support switching m from 8 to 15 (rearrangeable → strict-sense) as a build-time
   parameter, so scaling from 128 to thousands of ports or upgrading the blocking guarantee is a
@@ -369,7 +375,116 @@ count — not preemptively.
 
 ---
 
-## 7. Interview talking points checklist
+## 7. Closing iSLIP's efficiency gap: CIOQ with speedup
+
+iSLIP is a heuristic, not the optimal scheduler. The actually-optimal algorithm (Tassiulas &
+Ephremides' MaxWeight matching — pick the maximum-weight bipartite matching every slot,
+weighted by queue length or cell age) provably achieves 100% throughput for *any* admissible
+traffic pattern, not just well-behaved ones. It's also an O(N³) computation (Hungarian
+algorithm) — completely irrelevant for a 2 GHz, high-radix hardware scheduler, so it's excluded
+here as a hardware candidate entirely (it remains useful only as a Python-only offline ceiling,
+never as an RTL target). The real question is what closes iSLIP's gap toward that ceiling
+*without* abandoning the small-parallel-local-arbiter structure that makes it 2 GHz-schedulable
+in the first place (§4).
+
+### Why iSLIP alone leaves throughput on the table
+
+Model results (`model/`, hotspot traffic, N=128, load=0.9, single hotspot port at 70% of
+traffic) surfaced this concretely: `conditional_throughput_mean` — throughput measured only
+over destinations that actually had a cell to send, i.e. excluding idle time — was **0.7427**,
+not 1.0, even though the aggregate result matched the theoretical best-case almost exactly
+(§ the model's own README). The mechanism: an input holding cells for both the saturated
+hotspot and a lightly-loaded destination can have its accept-phase round-robin pick the hotspot
+grant in a given slot, silently dropping an otherwise-uncontested grant for the cold
+destination that slot. This is the textbook "maximal, not maximum, matching" property of
+iSLIP — a real, structural consequence of using a fast heuristic, not a bug.
+
+### CIOQ + speedup: the standard fix
+
+Chuang, Goel, McKeown, and Prabhakar (*Matching Output Queueing with a Combined Input/Output-
+Queued Switch*, 1999) proved that a **combined input/output-queued (CIOQ)** switch — VOQs at
+the input as already planned, plus a small amount of buffering at the output, with the internal
+fabric running at speedup **S ≥ 2** relative to the external line rate — can exactly emulate an
+ideal output-queued switch's throughput and delay, using *any* reasonable matching algorithm,
+iSLIP included. Instead of inventing a smarter (slower, more complex) scheduler, you give the
+existing simple one more chances per external cell-time to find a match: internal fabric
+bandwidth is usually cheap relative to external I/O, so this is a favorable trade.
+
+**Measured, not asserted** — the same hotspot config swept over speedup:
+
+| Speedup S | `conditional_throughput_mean` | `aggregate_throughput` | `cell_latency_mean` |
+|---|---|---|---|
+| 1.0 | 0.7427 | 0.2807 | 295.4 |
+| 1.5 | 0.9527 | 0.2808 | 289.7 |
+| 2.0 | 0.9931 | 0.2808 | 289.0 |
+| 4.0 | 1.0000 | 0.2808 | 288.9 |
+
+Two things worth being precise about, both visible directly in this table:
+
+1. **Speedup cannot raise the aggregate throughput ceiling** — `aggregate_throughput` is flat
+   across every S. That ceiling is set purely by offered rate vs. the 1-cell/slot external line
+   cap (`theoretical.py`, independent of scheduling entirely); speedup only helps the scheduler
+   get closer to a ceiling that already existed. `conditional_throughput_mean`, measured at the
+   external line, is exactly the right metric to watch, and it converges to 1.0 by S=4 here.
+2. **S=2 already recovers ~99%** of the achievable gap in this measurement — consistent with
+   the literature's headline result that S=2 suffices in the general case. Diminishing returns
+   past that are visible directly (S=2 → 4 gains 0.007, not another 0.25).
+
+### The real hardware cost — this is not free
+
+Speedup means the **internal fabric bandwidth and the arbitration issue rate** must both run at
+S× the external line rate, not just the datapath wiring. Concretely, at S internal iSLIP
+matching rounds per external cell-time, the arbiter must be able to *issue* a new matching
+decision S times as often — this is where "assume a 448G Ethernet PHY" turns into a real
+timing-closure number rather than an abstract parameter.
+
+At 448 Gbps per port and a 2 GHz internal clock, the **external cell-time budget** shrinks fast
+as cell size shrinks:
+
+| Cell size | External cell-time | Clock cycles available @ 2 GHz |
+|---|---|---|
+| 64 B | 1.143 ns | **2.29** |
+| 128 B | 2.286 ns | 4.57 |
+| 256 B | 4.571 ns | 9.14 |
+| 512 B | 9.143 ns | 18.29 |
+
+At 64B cells and S=1, a full iSLIP decision (request/grant/accept, several iterations) must be
+*issued* within ~2.3 clock cycles — not resolved, issued, since a properly pipelined arbiter
+decouples decision **latency** (how many cycles a given match takes to fully resolve) from
+decision **issue throughput** (how often a new one can be started). Pipelining is the standard,
+well-understood answer here — not exotic, just mandatory at these numbers, and worth stating
+explicitly as a hard requirement rather than an implementation detail to figure out later.
+Adding speedup S on top tightens the **issue interval** further, to roughly (cell-time / S):
+at 64B cells and S=2, that's ~1.14 cycles between successive decision-issues. This is a
+throughput (issue-rate) requirement on the pipeline, not a latency requirement on any single
+decision — achievable via deeper pipelining and/or a wider internal datapath (processing
+multiple words per issue slot, amortizing the issue-rate pressure back down) — but it is a real
+design constraint, not a free parameter, and it compounds directly with the cell-size choice.
+
+This is exactly why cell size can't be picked from the fairness/segmentation argument alone
+(§1, §2.2's HOL discussion): **larger cells relax the arbitration cycle budget above but worsen
+head-of-line fairness for small flows behind large ones** — the two considerations pull in
+opposite directions and must be balanced together, not decided independently. A first-order
+read of the numbers above suggests cell sizes below ~128B are a difficult target for a 2 GHz
+arbiter at 448G-class line rates without an unusually deep, wide pipeline; this is an estimate
+worth verifying against actual synthesis and STA results (the OpenSTA/ASAP7 toolchain set up
+for this project, once real RTL exists to check), not a conclusion to treat as final from a
+back-of-envelope calculation alone.
+
+### Where this leaves the design
+
+- Keep iSLIP (§4's reasoning is unaffected — it's still the only candidate whose scheduling
+  decomposes into small, parallel, local arbitration).
+- Add CIOQ with a target speedup of **S=2** as a Milestone 3+ parameter, not a Milestone 1
+  requirement — it's an efficiency refinement on top of an already-correct VOQ+iSLIP design,
+  not a prerequisite for one.
+- Treat cell size and speedup as *jointly* constrained by the 448G cycle-budget math above, not
+  decided independently from the fairness argument alone — revisit both together once real
+  synthesis numbers are available.
+
+---
+
+## 8. Interview talking points checklist
 
 - [ ] HOL blocking and why VOQ fixes it (and what VOQ alone doesn't fix — still needs
       speedup or careful scheduling for 100% throughput under non-uniform traffic).
@@ -395,3 +510,15 @@ count — not preemptively.
       not — this is the deciding argument, not crosspoint count alone.
 - [ ] N_max = 2×(K/2)^h formula for h-tier Clos/fat-tree networks, and being able to derive it
       live (each non-terminal tier splits radix K half up / half down).
+- [ ] Why iSLIP isn't optimal (MaxWeight matching is, but is O(N³) and hardware-irrelevant), and
+      what CIOQ + speedup (Chuang/Goel/McKeown/Prabhakar, S=2 suffices) does instead — closes
+      the gap by giving the *same* simple scheduler more chances per external cell-time, not by
+      using a smarter one.
+- [ ] Why speedup can never raise the aggregate throughput ceiling (set purely by offered rate
+      vs. the external line's 1-cell/slot cap) — it only helps reach a ceiling that already
+      existed; the model's own measurement shows aggregate throughput flat across S while
+      conditional throughput (measured at the external line) converges 0.74 → 1.0.
+- [ ] The 448G/2 GHz cell-time budget math (down to ~2.3 cycles at 64B) and why it means the
+      arbiter must be pipelined — decision issue-rate, not decision latency, is the hard
+      constraint, and it tightens further with speedup and loosens with larger cells, directly
+      trading off against the HOL-fairness argument for smaller cells (§2.2).

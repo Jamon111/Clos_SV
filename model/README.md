@@ -58,6 +58,7 @@ python3 sim.py --n-ports 128 --load 0.9 --pattern hotspot --hotspot-frac 0.7 \
 | `--n-ports` | int | 128 | Port count N (both ingress and egress). |
 | `--load` | float, **fraction of cell-slot capacity** | 0.8 | Offered load per input, 0–1. **Not** a packet-arrival probability — see "Why `load` isn't packet-arrival probability" below. 1.0 = one cell's worth of work every slot (saturation). |
 | `--iterations` | int | 3 | iSLIP request/grant/accept iterations per slot. |
+| `--speedup` | float, ≥1.0 | 1.0 | CIOQ internal fabric speedup over external line rate. 1.0 = pure input-queued (original behavior, exactly reproduced). See "CIOQ and speedup" below. |
 | `--slots` | int | 20000 | Simulation duration, in cell-times. |
 | `--seed` | int | 0 | RNG seed — same seed reproduces the exact same run. |
 | `--pattern` | `uniform` \| `hotspot` \| `permutation` \| `bursty` | `uniform` | Destination-selection pattern. `permutation` = fixed conflict-free destination per input (easy-case baseline). `bursty` = on/off Markov-modulated arrivals layered on top of uniform destination choice. |
@@ -85,6 +86,38 @@ measured here is queueing delay in a single-stage VOQ+iSLIP scheduler).
 
 All randomness is seeded (`--seed`) for reproducibility — same seed, same result, which matters
 once this is used as a regression baseline against RTL simulation.
+
+### CIOQ and speedup
+
+`--speedup S` (S≥1.0) models a combined input/output-queued (CIOQ) fabric: internal iSLIP
+matching runs `S` rounds per external cell-time (fractional S supported via a credit
+accumulator — e.g. 1.5 alternates 1,2,1,2,... rounds/slot), moving cells from VOQ into a
+per-destination output queue; the external line still drains at most 1 cell/slot from that
+queue regardless of S. **S=1.0 exactly reproduces the model's original single-round-per-slot
+behavior** (verified: bit-identical `cells_offered`/`cells_delivered`/`aggregate_throughput`/
+`max_voq_age` before and after this feature was added) — S=1 is not a special case in the code,
+just the credit accumulator always resolving to exactly 1 round.
+
+Full theoretical grounding (Chuang/Goel/McKeown/Prabhakar's S=2-suffices result) and the real
+hardware cost (arbiter issue-rate at a 448G line rate, traded off against cell size) are in
+[docs/arch-spec.md §7](../docs/arch-spec.md). Measured on the hotspot config used throughout
+this README:
+
+| Speedup S | `conditional_throughput_mean` | `aggregate_throughput` |
+|---|---|---|
+| 1.0 | 0.7427 | 0.2807 |
+| 1.5 | 0.9527 | 0.2808 |
+| 2.0 | 0.9931 | 0.2808 |
+| 4.0 | 1.0000 | 0.2808 |
+
+`aggregate_throughput` barely moves — speedup cannot raise a ceiling set purely by offered rate
+vs. the external line's 1-cell/slot cap. `conditional_throughput_mean` (measured at the
+external line, so speedup can't bypass it) is the metric that actually shows the mechanism
+working, converging to 1.0.
+
+**Runtime note**: each unit of speedup roughly multiplies per-slot cost (more internal iSLIP
+rounds, each rebuilding the O(N²) request bitmap) — S=4 at N=128 is noticeably slower than S=1.
+Use `--progress-interval` to keep visibility on long runs.
 
 **Progress**: printed to stderr (so `--json` on stdout stays parseable) every ~10% of the run
 for anything 2000+ slots, since a large `--n-ports` run is genuinely slow in pure Python (the

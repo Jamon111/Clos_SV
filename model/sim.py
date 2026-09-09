@@ -21,6 +21,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-ports", type=int, default=128)
     p.add_argument("--load", type=float, default=0.8, help="P(new packet/slot) per idle input")
     p.add_argument("--iterations", type=int, default=3, help="iSLIP iterations per slot")
+    p.add_argument("--speedup", type=float, default=1.0,
+                    help="CIOQ internal fabric speedup over external line rate, >=1.0 "
+                         "(1.0 = pure input-queued, the model's original behavior)")
     p.add_argument("--slots", type=int, default=20000)
     p.add_argument("--seed", type=int, default=0)
 
@@ -85,7 +88,7 @@ def main() -> None:
     else:
         progress_interval = max(1, args.slots // 10) if args.slots >= 2000 else 0
 
-    sim = SwitchSim(cfg, iterations=args.iterations, seed=args.seed)
+    sim = SwitchSim(cfg, iterations=args.iterations, seed=args.seed, speedup=args.speedup)
     summary = sim.run(args.slots, progress_interval=progress_interval)
     histograms = None if args.no_histogram else sim.metrics.latency_histograms()
 
