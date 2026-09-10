@@ -78,6 +78,12 @@ the open-source EDA toolchain to check whether the design hits timing.
 - The model now supports `--speedup` (CIOQ, see the key decision above) — verified S=1.0
   reproduces prior behavior bit-for-bit. Each unit of speedup roughly multiplies per-slot
   runtime, so large sweeps at high S are slow; use `--progress-interval` for visibility.
+- The model also has a Little's Law consistency check (`littles_law_ratio` in the summary) —
+  an independent cross-check (L=λW holds for any stable queueing system) against the model's
+  own throughput/latency numbers. Ratio ≈1.0 confirms steady state; a large ratio (e.g. 74.7 on
+  the oversubscribed hotspot config) is itself a correct diagnostic of a growing backlog, not a
+  bug. `docs/arch-spec.md` §2.5 now also has a proper structural definition of CRRD (previously
+  used throughout without ever being defined).
 - **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started.** Next concrete action: implement
   `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
   `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6. When writing the RTL flit
