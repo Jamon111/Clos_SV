@@ -189,6 +189,27 @@ same pattern, larger.*
     for exactly this trade-off.
   - **Strictly non-blocking** (m≥2n−1): a new connection is always admittable without
     disturbing existing ones, with no search required — the harder, more expensive guarantee.
+
+  > **CRRD, defined.** Concurrent Round-Robin Dispatching extends iSLIP's request/grant/accept
+  > from a single-stage crossbar to a 3-stage Clos by adding a second matching dimension —
+  > not just "which output," but "which middle module to route through." Per cell time, over
+  > a few iterations: (1) **Request** — each Input Module's non-empty VOQs (one per destination
+  > Output Module) compete internally, round-robin, for the IM's m outbound links (one per
+  > middle module) — an IM can only issue as many requests per iteration as it has physical
+  > links to the middle stage; (2) **Grant** — each Center/Middle Module, seeing requests from
+  > multiple IMs for its link, grants via its own round-robin pointer, exactly like iSLIP's
+  > per-output arbiter; (3) **Accept** — the receiving side resolves which granted middle-module
+  > offer to actually accept, again round-robin. All pointers desynchronize the same way
+  > iSLIP's do (advance only on a successful match), and a handful of iterations converges close
+  > to a maximal matching for this input–middle–output problem. This is precisely what a naive
+  > per-tile iSLIP lacks: no way to discover an *alternate* middle module when the first-choice
+  > one is contended — CRRD's added grant/accept round at the middle stage supplies exactly that,
+  > using the same small, local, parallel arbiter primitives that make iSLIP itself
+  > 2 GHz-schedulable in the first place. Originally from Oki, Rojas-Cessa, and Chao's work on
+  > multi-stage Clos-network switch scheduling (early-2000s); later refinements (e.g.
+  > Concurrent Master-Slave Round Robin) address residual throughput/fairness gaps in the base
+  > scheme.
+
 - **2 GHz fitness — the deciding factor.** Unlike the monolithic crossbar's single N-wide
   arbitration domain, Clos's matching decomposes into many small, parallel, local arbitration
   problems (radix n=8 or r=16, not N=128): each arbiter's priority-encoder depth is bounded by

@@ -119,6 +119,33 @@ working, converging to 1.0.
 rounds, each rebuilding the O(N²) request bitmap) — S=4 at N=128 is noticeably slower than S=1.
 Use `--progress-interval` to keep visibility on long runs.
 
+### Little's Law as an independent consistency check
+
+Little's Law — L = λW (average number in the system = arrival rate × average time in the
+system) — holds for *any* stable queueing system regardless of arrival distribution, service
+distribution, or scheduling discipline. That makes it a completely independent cross-check:
+`littles_law_L_measured` (time-averaged total occupancy, tracked incrementally in O(1) per slot
+so it doesn't add per-slot cost) is compared against `littles_law_L_predicted` (throughput ×
+mean latency, computed from two numbers that are measured completely separately). If the
+model's arithmetic were wrong somewhere, these two independently-derived quantities would have
+no particular reason to agree.
+
+Verified on two contrasting cases:
+- **Stable** (uniform, load=0.5, well under capacity): `littles_law_ratio` = **1.0016** —
+  essentially exact, confirming the system reached steady state and both measurements are
+  mutually consistent.
+- **Oversubscribed** (the hotspot config above, `load=0.9` with 70% of traffic on one of 128
+  ports — the same config that originally surfaced iSLIP's efficiency gap): `littles_law_ratio`
+  = **74.746** — a huge divergence. This is not a bug; it's exactly the expected signature of a
+  system with a monotonically growing backlog (`cells_queued_at_end` was 1,589,900 in this
+  run). A large fraction of `L` is cells still in flight that haven't been delivered yet, so
+  haven't contributed a `W` sample to the mean-latency average — Little's Law's simple form
+  assumes steady state, and a ratio far from 1.0 is itself a useful diagnostic that the
+  measurement window caught a system still building up backlog, not a computation error.
+
+Rule of thumb used in `littles_law_check`: ratio in [0.9, 1.1] → "consistent (steady state)";
+outside that → "diverges -- system likely not in steady state (growing backlog)".
+
 **Progress**: printed to stderr (so `--json` on stdout stays parseable) every ~10% of the run
 for anything 2000+ slots, since a large `--n-ports` run is genuinely slow in pure Python (the
 N=128 hotspot example above takes ~35s at ~565 slots/s). Override with `--progress-interval N`,

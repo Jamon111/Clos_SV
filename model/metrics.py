@@ -48,6 +48,7 @@ class Metrics:
         self.cells_offered = 0
         self.cells_delivered = 0
         self.packets_completed = 0
+        self._occupancy_sum = 0  # sum of total in-flight cells, sampled once/slot -- for Little's Law
 
         self.cell_latencies: list[int] = []
         self.packet_latencies: list[int] = []
@@ -68,6 +69,13 @@ class Metrics:
 
     def record_offered(self, n_cells: int) -> None:
         self.cells_offered += n_cells
+
+    def record_occupancy(self, total_in_flight: int) -> None:
+        """Called once per slot with the current total cell count anywhere
+        in the system (VOQ + output queue combined). Time-averaging this
+        gives L for Little's Law (L = lambda * W) -- see summary()'s
+        littles_law fields."""
+        self._occupancy_sum += total_in_flight
 
     def record_voq_ages(self, ages: dict[tuple[int, int], int]) -> None:
         for k, age in ages.items():
@@ -182,6 +190,33 @@ class Metrics:
             "jains_fairness_index": round(self.jains_fairness_index(), 4),
             "max_voq_age": max(self.max_voq_age_seen.values()) if self.max_voq_age_seen else 0,
         }
+
+        # Little's Law (L = lambda * W) as an independent consistency check:
+        # L measured directly (time-averaged total occupancy) should match
+        # lambda*W computed from throughput and latency measured completely
+        # separately. Units must match: lambda here is the *aggregate*
+        # (unnormalized) delivery rate, not aggregate_throughput (which
+        # divides by N) -- L counts cells system-wide, not per-port.
+        if self.total_slots and self.cell_latencies:
+            L_measured = self._occupancy_sum / self.total_slots
+            lam = self.cells_delivered / self.total_slots
+            W = statistics.mean(self.cell_latencies)
+            L_predicted = lam * W
+            ratio = L_measured / L_predicted if L_predicted else None
+            out["littles_law_L_measured"] = round(L_measured, 2)
+            out["littles_law_L_predicted"] = round(L_predicted, 2)
+            out["littles_law_ratio"] = round(ratio, 4) if ratio is not None else None
+            # Ratio >> 1.0 is itself a diagnostic: it means a meaningful
+            # fraction of L is cells still in flight that haven't completed
+            # (and so haven't contributed a W sample yet) -- i.e. the system
+            # has a growing backlog and isn't in steady state over this run,
+            # not that the measurement is wrong. See model/README.md.
+            if ratio is None:
+                out["littles_law_check"] = "N/A (no deliveries yet)"
+            elif 0.9 <= ratio <= 1.1:
+                out["littles_law_check"] = "consistent (steady state)"
+            else:
+                out["littles_law_check"] = "diverges -- system likely not in steady state (growing backlog)"
 
         if cells_queued_at_end is not None:
             out["cells_queued_at_end"] = cells_queued_at_end

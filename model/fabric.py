@@ -42,6 +42,7 @@ class SwitchSim:
         self.now = 0
         self.speedup = speedup
         self._speedup_credit = 0.0
+        self._total_in_flight = 0  # incremental O(1) occupancy tracker, for Little's Law (L)
 
         rng_seed = cfg.seed if seed is None else seed
         self._next_cell_id = 0
@@ -81,6 +82,7 @@ class SwitchSim:
             cells = source.maybe_generate(now)
             if cells:
                 self.metrics.record_offered(len(cells))
+                self._total_in_flight += len(cells)
                 dst = cells[0].dst
                 q = self.voq[src][dst]
                 was_empty = not q
@@ -131,9 +133,11 @@ class SwitchSim:
             if oq:
                 cell = oq.popleft()
                 self.metrics.record_delivery(cell, now)
+                self._total_in_flight -= 1
                 delivered_dsts.add(dst)
 
         self.metrics.record_dest_activity(active_dsts, delivered_dsts)
+        self.metrics.record_occupancy(self._total_in_flight)
 
         # 5) Track VOQ ages (starvation bound) before advancing time.
         ages = {}
