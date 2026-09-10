@@ -8,6 +8,8 @@ import sys
 import time
 from collections import deque
 
+import numpy as np
+
 from arbiter import ISlipArbiter
 from metrics import Metrics
 from traffic import TrafficConfig, TrafficSource, estimate_avg_cells_per_packet
@@ -60,6 +62,12 @@ class SwitchSim:
         # voq[src][dst] = deque of Cell, FIFO within a flow -- internal fabric side
         self.voq: list[list[deque]] = [[deque() for _ in range(self.n)] for _ in range(self.n)]
         self.voq_oldest_gen_time: list[list[int | None]] = [[None] * self.n for _ in range(self.n)]
+        # voq_occ[src,dst] = is that VOQ nonempty -- maintained incrementally
+        # (set/cleared on arrival/drain, never rebuilt from scratch) and fed
+        # directly to the arbiter as its request bitmap. Replaces an O(N^2)
+        # Python set-comprehension rebuild every internal round; profiling
+        # showed that rebuild was ~29% of total runtime at N=128.
+        self.voq_occ = np.zeros((self.n, self.n), dtype=bool)
 
         # output_queue[dst] = cells that have crossed the fabric, waiting for
         # the external line (the CIOQ "O" -- only present/needed when S>1;
@@ -89,6 +97,7 @@ class SwitchSim:
                 q.extend(cells)
                 if was_empty:
                     self.voq_oldest_gen_time[src][dst] = cells[0].gen_time
+                self.voq_occ[src, dst] = True
 
         # 2) Internal fabric: run `internal_rounds` iSLIP matches this
         # external slot (>1 only when speedup>1 models a faster-than-line
@@ -99,21 +108,19 @@ class SwitchSim:
         internal_rounds = int(self._speedup_credit)
         self._speedup_credit -= internal_rounds
 
-        requests = [
-            {dst for dst in range(self.n) if self.voq[src][dst]} for src in range(self.n)
-        ]
         for _ in range(internal_rounds):
-            if not any(requests):
+            if not self.voq_occ.any():
                 break  # nothing left to match this slot
-            matches = self.arbiter.match(requests)
+            matches = self.arbiter.match(self.voq_occ)
             for src, dst in matches:
                 q = self.voq[src][dst]
                 cell = q.popleft()
                 self.output_queue[dst].append(cell)
-                self.voq_oldest_gen_time[src][dst] = q[0].gen_time if q else None
-            requests = [
-                {dst for dst in range(self.n) if self.voq[src][dst]} for src in range(self.n)
-            ]
+                if q:
+                    self.voq_oldest_gen_time[src][dst] = q[0].gen_time
+                else:
+                    self.voq_oldest_gen_time[src][dst] = None
+                    self.voq_occ[src, dst] = False
 
         # 3) Diagnostic: did each destination have work available (VOQ or
         # output queue) this slot, and did it actually transmit? See
@@ -121,7 +128,7 @@ class SwitchSim:
         # specifically the metric that should improve when speedup>1 fixes
         # internal matching contention, since it's measured at the external
         # line, which speedup can never bypass.
-        active_dsts = {dst for reqs in requests for dst in reqs} | {
+        active_dsts = set(np.flatnonzero(self.voq_occ.any(axis=0)).tolist()) | {
             dst for dst in range(self.n) if self.output_queue[dst]
         }
 

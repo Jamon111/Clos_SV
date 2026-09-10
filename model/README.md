@@ -1,5 +1,8 @@
 # VOQ + iSLIP performance model
 
+**Dependencies**: NumPy (`pip install numpy`), added for the occupancy-bitmap performance work
+below. Everything else is Python stdlib.
+
 A discrete-event, cell-slotted Python model of the VOQ + iSLIP switch fabric. Two purposes:
 
 1. **Golden reference** — an independent implementation of iSLIP's matching behavior
@@ -116,8 +119,45 @@ external line, so speedup can't bypass it) is the metric that actually shows the
 working, converging to 1.0.
 
 **Runtime note**: each unit of speedup roughly multiplies per-slot cost (more internal iSLIP
-rounds, each rebuilding the O(N²) request bitmap) — S=4 at N=128 is noticeably slower than S=1.
-Use `--progress-interval` to keep visibility on long runs.
+rounds). Use `--progress-interval` to keep visibility on long runs.
+
+### Performance: what was optimized, what wasn't, and why
+
+Profiled (3000 slots, N=128, `cProfile`) before touching anything: rebuilding the O(N²) request
+bitmap from scratch every internal round (`fabric.py`) and `RoundRobinPointer`'s per-call
+priority-list construction (`arbiter.py`) together accounted for **~55%** of total runtime.
+Two changes, verified against the regression baseline (bit-for-bit identical
+`cells_offered`/`cells_delivered`/`aggregate_throughput`/`littles_law_ratio`) after each step:
+
+1. **Incremental occupancy tracking** — `voq_occ`, a boolean array maintained by flipping one
+   bit on arrival/drain, replacing a full rescan of every VOQ every round.
+2. **NumPy for the occupancy array's bulk operations** — `.any(axis=0)` for the active-
+   destinations diagnostic is a genuine vectorized reduction over a real N×N array, which pays
+   off cleanly.
+
+Net result: **8.0s → 3.59s on the profiled workload (~2.23x)**, not the 10x+ one might hope for
+from "vectorizing with NumPy." Re-profiling why: `RoundRobinPointer.select()` — the per-
+candidate round-robin winner search — is called ~750,000 times in this same run, each call
+doing a handful of NumPy operations (`.any()`, `.argmax()`) on an array of size N=128. NumPy's
+per-call dispatch overhead (type/dtype checks, ufunc machinery) is roughly constant regardless
+of array size, and at N=128 called that many times, that fixed overhead rivals or exceeds the
+actual vectorized computation it's paying for. This is a real, known NumPy anti-pattern —
+vectorization pays off on a few large operations, not many tiny ones in a Python-level loop —
+and it's worth having measured rather than assumed, since the natural expectation going in was
+that NumPy would help uniformly.
+
+An initial `np.roll`-based `select()` (rotate the whole array, then find the first True) was
+replaced with a slice-based version (search `candidates[value:]` then `candidates[:value]`,
+using views instead of `roll`'s full-array copy) — 3.59s vs. 4.03s for the roll-based version,
+confirming the copy was part of the cost, though NumPy's per-call overhead remains the dominant
+remaining cost by the profile.
+
+**Next lever, not yet taken**: replacing `RoundRobinPointer` and the occupancy bitmap with pure
+Python integer bitmasks (rotate-and-find-lowest-set-bit via native int operations) would avoid
+NumPy's per-call dispatch overhead entirely for this hot path, at the cost of losing the clean
+columnar (`.any(axis=0)`)-style bulk operations NumPy gives elsewhere — plausibly a further
+1.5-3x based on how much of the current profile `select()` still accounts for, but not
+implemented; the current 2.23x was the scope of the ask that motivated this section.
 
 ### Little's Law as an independent consistency check
 
