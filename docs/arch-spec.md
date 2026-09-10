@@ -451,6 +451,28 @@ Two things worth being precise about, both visible directly in this table:
    the literature's headline result that S=2 suffices in the general case. Diminishing returns
    past that are visible directly (S=2 → 4 gains 0.007, not another 0.25).
 
+### VOQ already is CIOQ's input side — no separate buffer needed
+
+Worth being explicit about, since it's easy to imagine as a third, distinct buffer: "CIOQ"
+decomposes into Input-Queueing + Output-Queueing + speedup, and VOQ (organized per destination,
+to avoid HOL blocking, §1) *is* the standard input-queueing structure every real CIOQ design
+uses — including Chuang/Goel/McKeown/Prabhakar's own paper above. Adding CIOQ to this design
+means adding an output buffer; the VOQ already sitting at the input is unchanged and unaffected.
+The model's own code confirms this directly — `fabric.py` has exactly two buffer structures,
+`voq` (present since Milestone 1) and `output_queue` (the only thing CIOQ added).
+
+This carries forward to Milestone 3's multi-stage Clos, where it becomes a real design
+decision rather than a triviality: does buffering need to exist *between* the three internal
+hops (input module → middle module → output module) too, or do the same two buffers (VOQ at
+the true input, one output queue at the true output) still suffice across all three stages?
+The clean answer — and the one consistent with how CRRD is normally described — is that no
+intermediate buffering is needed, **provided CRRD reserves the entire 3-hop path atomically
+within a single cell-time**: a cell either gets a fully-reserved input→middle→output path this
+cell-time, or it stays in VOQ and retries next cell-time. Milestone 3 should preserve this
+property explicitly (whole-path reservation, not partial/staged reservation) rather than
+introduce per-hop buffering as a workaround if scheduling gets complicated — that would be a
+materially different (and more expensive) design than what §2.5 and §4 assume.
+
 ### The real hardware cost — this is not free
 
 Speedup means the **internal fabric bandwidth and the arbitration issue rate** must both run at
