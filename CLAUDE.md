@@ -61,6 +61,12 @@ the open-source EDA toolchain to check whether the design hits timing.
   pipelined (issue-rate, not decision latency, is the constraint), and cell size/speedup are
   jointly constrained by this, not decided from HOL-fairness alone. Full reasoning and the
   measured table: `docs/arch-spec.md` §7.
+- **VOQ already is CIOQ's input side — no separate input buffer exists or is needed.** CIOQ =
+  input-queueing (VOQ) + output-queueing (added) + speedup; `fabric.py`'s `voq` predates CIOQ,
+  `output_queue` is the only thing CIOQ added. For Milestone 3's multi-stage Clos: the same
+  two-buffer picture (VOQ at input, one output queue at output, nothing in between) only holds
+  if CRRD reserves the whole input→middle→output path atomically per cell-time — preserve that
+  property explicitly rather than introducing per-hop buffering as a scheduling workaround.
 
 ## Status / where we left off
 
