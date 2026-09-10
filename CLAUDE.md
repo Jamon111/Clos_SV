@@ -90,6 +90,17 @@ the open-source EDA toolchain to check whether the design hits timing.
   the oversubscribed hotspot config) is itself a correct diagnostic of a growing backlog, not a
   bug. `docs/arch-spec.md` §2.5 now also has a proper structural definition of CRRD (previously
   used throughout without ever being defined).
+- The model now depends on NumPy (previously stdlib-only) — used for `voq_occ`, an incrementally
+  maintained boolean occupancy array replacing a full O(N²) rebuild every internal round.
+  Profiled before optimizing: got 2.23x (8.0s → 3.59s on the standard profiling workload), not
+  more, because `RoundRobinPointer.select()` is called ~750K times/run on N=128 arrays and
+  NumPy's per-call dispatch overhead is roughly constant regardless of array size — it doesn't
+  pay for itself at this granularity the way the occupancy array's bulk `.any(axis=0)` does. A
+  pure-Python integer-bitmask rewrite of just the round-robin selection was identified as the
+  next lever (not implemented). Verified bit-for-bit identical to the pre-optimization
+  implementation across every established regression baseline (hotspot, iterations curve,
+  permutation, bursty, low-load uniform) at each step, not just at the end. Full writeup:
+  `model/README.md`'s "Performance" section.
 - **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started.** Next concrete action: implement
   `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
   `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6. When writing the RTL flit
