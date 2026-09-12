@@ -136,7 +136,10 @@ Two changes, verified against the regression baseline (bit-for-bit identical
    off cleanly.
 
 Net result: **8.0s → 3.59s on the profiled workload (~2.23x)**, not the 10x+ one might hope for
-from "vectorizing with NumPy." Re-profiling why: `RoundRobinPointer.select()` — the per-
+from "vectorizing with NumPy." Independently confirmed on a different config (uniform, not
+hotspot; `--cell-size 16`; `--speedup 2`; N=128, 20000 slots): **73.3s → 31.3s, 2.34x** — close
+enough to the profiled figure to say the win generalizes rather than being specific to the one
+workload that got profiled. Re-profiling why it's ~2.2x and not more: `RoundRobinPointer.select()` — the per-
 candidate round-robin winner search — is called ~750,000 times in this same run, each call
 doing a handful of NumPy operations (`.any()`, `.argmax()`) on an array of size N=128. NumPy's
 per-call dispatch overhead (type/dtype checks, ufunc machinery) is roughly constant regardless
