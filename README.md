@@ -52,6 +52,7 @@ Full milestone spec: [docs/arch-spec.md §6](docs/arch-spec.md#6-resulting-desig
 | [OpenSTA](https://github.com/parallaxsw/OpenSTA) | Multi-corner static timing analysis | build from source — see below |
 | [OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts) | Full RTL-to-GDSII place & route | Docker — see below |
 | [ASAP7](https://github.com/The-OpenROAD-Project/asap7) | Predictive 7nm PDK (multi-corner Liberty + LEF) | `git clone`, see below |
+| [cocotb](https://www.cocotb.org/) | Python-based RTL testbench framework (planned verification environment) | `pip install cocotb` — **installed, not yet wired up**; setup deferred until Milestone 1 RTL exists to test against. If `cocotb-config` isn't found after install on a pyenv-managed Python, run `pyenv rehash`. |
 
 **Verible** (no Homebrew formula — install the prebuilt release binary):
 ```

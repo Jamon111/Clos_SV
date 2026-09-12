@@ -67,6 +67,77 @@ the open-source EDA toolchain to check whether the design hits timing.
   two-buffer picture (VOQ at input, one output queue at output, nothing in between) only holds
   if CRRD reserves the whole input→middle→output path atomically per cell-time — preserve that
   property explicitly rather than introducing per-hop buffering as a scheduling workaround.
+- **Standing practice (see global memory, not repeated in full here): brutally honest
+  communication and independent verification of every result, by default, without being asked.**
+  This session's pattern to keep following: profile/measure before claiming a result, cross-check
+  with an independently-derived number (analytical bound, regression baseline, Little's Law)
+  rather than trusting one code path's own output, and state plainly when something is weaker
+  than hoped or a plan has a real gap (e.g. the 2.23x NumPy speedup being less than expected, and
+  saying so with the profiling data, rather than only reporting the win).
+
+## Verification plan (planned, nothing built yet — see "Status" below)
+
+Extensive planning happened before any RTL exists; capturing it now so it isn't re-derived.
+
+- **`permutation` traffic pattern, precise definition**: `traffic.py` implements it as a fixed
+  cyclic shift (`dst = (src+1) % N`) — one specific bijection, hardcoded, not randomized or
+  parameterized. It is zero-contention by construction (confirmed empirically:
+  `conditional_throughput_mean = 1.0`, vs. 0.9339 for uniform at the same N/load — uniform is
+  *not* contention-free, permutation is). If broader permutation-space coverage is wanted later
+  (not just this one shift), the mapping needs to become configurable/randomizable — not done.
+- **The N=128 baseline correctness test**: one directed, **deterministic** (not the model's
+  statistical/random traffic generator) test case — all 128 ports sending to a unique other port
+  simultaneously, saturating, from cycle 0. Must show zero bubbles and full ENET-to-ENET line
+  rate immediately. Caught and worth remembering: the model's own `load=1.0` does *not* mean
+  "always busy" — it's an asymptotic average, so even permutation traffic at `--load 1.0` shows
+  ~96.5% aggregate throughput despite zero scheduling loss, purely from the traffic generator's
+  own statistical idle gaps. The strict zero-bubble claim needs deterministic, always-full-queue
+  stimulus, not the statistical generator at load=1.0 — conflating the two would produce a false
+  "RTL failure" report against a design that's actually behaving correctly.
+- **Bubble — three distinct failure modes, need to be distinguishable when tracing a bubble back
+  to its source (not just counted in aggregate)**:
+  1. *Scheduling-loss bubble* — a cell existed in a VOQ for a destination, contention prevented
+     the grant. Always worth minimizing. Already measured (`dest_active_slots - dest_delivered`
+     per destination in `metrics.py`, not yet exposed under an explicit "bubble" name).
+  2. *Source-starvation bubble* — destination idle because no cell exists anywhere yet (nothing
+     generated). **Not inherently a problem** — only a problem if it interferes with/blocks a
+     *different*, active data stream. Don't flag these as failures on their own.
+  3. *Pipeline-transit bubble* — a cell matched but still in flight through a multi-cycle
+     pipeline. RTL-only concept; the model doesn't simulate pipeline stages, can't validate this.
+- **Verification environment: cocotb, single entry point for all tests.** Directed tests (fixed
+  stimulus) and constrained-random tests (randomized, live-compared against the model) both run
+  through cocotb — no separate framework for directed tests. Reference/expected-output files
+  (CSV) are *inputs cocotb tests read*, not a parallel execution path. The model *produces* the
+  CSVs; RTL/cocotb *consumes* them. Constrained-random is the primary coverage tool (deterministic
+  tests are a baseline/synthetic sanity check, not sufficient alone) — cocotb is the right choice
+  specifically because it's Python, so `fabric.py`/`arbiter.py`/`traffic.py` can be imported and
+  called directly as the live scoreboard, with no file-format sync problem between model and RTL.
+  `SwitchSim.step()` already advances exactly one slot per call, which happens to be the right
+  shape for a cocotb per-clock-edge coroutine loop — a lucky fit, not something engineered for
+  this purpose originally.
+- **cocotb is installed (v2.1.0, verified via `cocotb-config --version` after `pyenv rehash` —
+  the binary wasn't on PATH immediately after `pip install` on this pyenv-managed Python) but
+  deliberately NOT wired up or configured.** Setup is deferred until Milestone 1 RTL exists to
+  test against — there's no DUT yet, so a testbench environment can't actually be exercised.
+- **Sweep objective, corrected from an earlier wrong framing**: minimize **area**, not latency.
+  Throughput/bubbles/fairness are hard pass/fail gates (not sweep objectives). p99 latency is
+  also a bound, but *no specific threshold has been set* — the sweep is expected to reveal an
+  area-vs-p99-latency trade-off curve, and a "sweet spot" gets picked from that curve rather than
+  from a pre-specified number. Expect one minimum (least-area design meeting the gates), not a
+  multi-way Pareto trade-off, for the core throughput/bubbles/fairness gates.
+- **Area has no real metric available from the Python model** (agreed explicitly) — it's a
+  throughput/latency simulator, not a synthesis tool. Plan: use `docs/arch-spec.md`'s existing
+  crosspoint-counting math as a first-order proxy now, extended with two more cost terms the user
+  specified directly: **higher internal clock frequency / speedup costs area** (more parallelism
+  or deeper pipelining needed to hit a higher issue rate), and **deeper buffers (VOQ/output queue
+  depth) cost area** (memory). Treat the proxy's ranking as an estimate to narrow the field, then
+  confirm the real area of the winning candidate(s) via the already-set-up Yosys/OpenSTA/ASAP7
+  toolchain once RTL exists — the proxy is not a substitute for that, agreed explicitly.
+- **Once a sweep is actually run and a configuration confirmed, document the result and
+  rationale in `docs/arch-spec.md`** — not done yet, nothing has been run.
+- **Sequencing**: cocotb needs a DUT. The verification plan above can't actually be executed
+  until Milestone 1 RTL (or at least a stub, interface-first) exists. That's still the real next
+  blocker, not the verification environment in isolation.
 
 ## Status / where we left off
 
@@ -101,7 +172,14 @@ the open-source EDA toolchain to check whether the design hits timing.
   implementation across every established regression baseline (hotspot, iterations curve,
   permutation, bursty, low-load uniform) at each step, not just at the end. Full writeup:
   `model/README.md`'s "Performance" section.
-- **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started.** Next concrete action: implement
-  `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
+- **cocotb installed** (`pip install cocotb`, v2.1.0, verified working) — see the Verification
+  plan section above for the full discussion. **Nothing else in that section has been built** —
+  no test files, no cocotb testbench, no sweep script, no RTL. It's a plan only, captured here so
+  it survives the restart, not a description of code that exists.
+- **Milestone 1 RTL (8×8 VOQ + iSLIP) has not been started — still the actual next concrete
+  action**, and now the real blocker for the verification plan too (cocotb needs a DUT). Start
+  with `rr_pointer` (reusable rotating priority pointer, mirroring `model/arbiter.py`'s
   `RoundRobinPointer`) and `voq_bank`, per `docs/arch-spec.md` §6. When writing the RTL flit
-  format, do not include a timestamp field (see the `gen_time` decision above).
+  format, do not include a timestamp field (see the `gen_time` decision above). Defining the
+  module's pin-level interface early (interface-first) would also unblock starting to write
+  cocotb testbench code before the internals are fully implemented.
